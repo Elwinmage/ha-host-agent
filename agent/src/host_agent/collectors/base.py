@@ -8,7 +8,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from host_agent.i18n import Translator
-from host_agent.model import CollectorResult
+from host_agent.model import CollectorResult, EntitySpec
 
 
 @dataclass
@@ -51,6 +51,14 @@ class Collector(ABC):
     @abstractmethod
     def interval(self) -> int:
         """Polling interval in seconds."""
+
+    def keeps(self, spec: EntitySpec) -> bool:
+        """Whether a vanished persistent subject must still be reported as missing.
+
+        Lets a collector release subjects that are no longer wanted after a
+        configuration change (e.g. a mountpoint removed from `required`).
+        """
+        return True
 
     @abstractmethod
     def collect(self) -> CollectorResult:

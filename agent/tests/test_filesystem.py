@@ -63,3 +63,20 @@ def test_include_mounts(t_en):
     cfg = FilesystemConfig(include_mounts=["/bkup"])
     result = make(cfg, t_en).collect()
     assert {e.subject for e in result.entities} == {"fs_bkup"}
+
+
+def test_small_filesystem_in_mib(t_en):
+    result = make(FilesystemConfig(), t_en).collect()
+    free = next(e for e in result.entities if e.key == "fs_boot_firmware_free")
+    assert free.unit == "MiB"
+    reading = next(r for r in result.readings if r.key == "fs_boot_firmware_free")
+    assert reading.state == round((GIB // 2 - GIB // 10) / 1024**2, 2)
+    assert next(e for e in result.entities if e.key == "fs_bkup_free").unit == "GiB"
+
+
+def test_keeps_only_required(t_en):
+    collector = make(FilesystemConfig(required=["/bkup/dirvish"]), t_en)
+    from host_agent.model import EntitySpec
+
+    assert collector.keeps(EntitySpec("fs_bkup_dirvish", "binary_sensor", "x", subject="fs_bkup_dirvish"))
+    assert not collector.keeps(EntitySpec("fs_bkup", "binary_sensor", "x", subject="fs_bkup"))

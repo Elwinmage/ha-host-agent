@@ -7,7 +7,7 @@ from typing import Any
 TEXTS: dict[str, dict[str, str]] = {
     "en": {
         # Host entities
-        "host_problem": "Problem",
+        "host_problem": "Overall status",
         "host_problems": "Issues",
         "host_last_update": "Last update",
         "host_agent_version": "Agent version",
@@ -44,7 +44,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "collector_failed": "Collector {name} failed: {error}",
     },
     "fr": {
-        "host_problem": "Problème",
+        "host_problem": "État général",
         "host_problems": "Anomalies",
         "host_last_update": "Dernière mise à jour",
         "host_agent_version": "Version de l'agent",

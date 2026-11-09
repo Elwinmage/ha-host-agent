@@ -22,7 +22,7 @@ def test_example_config_is_valid(tmp_path, monkeypatch):
     assert cfg.language == "fr"
     assert cfg.mqtt.password == "s3cret"
     assert cfg.smart.ata_attribute_thresholds == {5: 0, 187: 0, 197: 0, 198: 0}
-    assert cfg.filesystem.thresholds_for("/bkup").critical == 97
+    assert cfg.filesystem.required == []
     assert cfg.filesystem.thresholds_for("/").critical == 95
 
 

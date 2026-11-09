@@ -150,7 +150,10 @@ class Runner:
             ran = True
             self._next_run[collector.name] = now + collector.interval
             try:
-                self._results[collector.name] = collector.collect()
+                result = collector.collect()
+                for spec in result.entities:
+                    spec.source = collector.name
+                self._results[collector.name] = result
                 self._failures.pop(collector.name, None)
             except Exception as err:
                 _LOGGER.exception("Collector %s failed", collector.name)
@@ -192,7 +195,7 @@ class Runner:
         for key, spec in self.state.known.items():
             if key in current or key.startswith("_"):
                 continue
-            if spec.persistent and spec.subject:
+            if spec.persistent and spec.subject and self._still_wanted(key, spec):
                 merged.entities.append(spec)
                 if spec.role == "problem":
                     since = self.state.last_seen.get(spec.subject, "?")
@@ -214,6 +217,16 @@ class Runner:
 
         self.state.known = {s.key: s for s in merged.entities}
         return Snapshot(merged.entities, merged.readings, merged.issues, removed)
+
+    def _still_wanted(self, key: str, spec: EntitySpec) -> bool:
+        # State files written by 0.1.0 have no source: infer it from the key
+        source = spec.source or (
+            "smart" if key.startswith("disk_") else "filesystem" if key.startswith("fs_") else None
+        )
+        owner = next((c for c in self.collectors if c.name == source), None)
+        if owner is None:
+            return source is None  # collector disabled: release its subjects
+        return owner.keeps(spec)
 
     @staticmethod
     def _is_host_key(key: str) -> bool:

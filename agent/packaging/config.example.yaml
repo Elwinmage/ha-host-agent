@@ -63,12 +63,13 @@ collectors:
     # Glob patterns of mountpoints to skip
     exclude_mounts: ["/proc/*", "/sys/*", "/dev/*", "/run/*", "/snap/*", "/var/lib/docker/*"]
     # Mountpoints that must always be mounted: critical issue when missing
-    required:
-      - /bkup
+    required: []
+    #  - /bkup/dirvish
     thresholds:         # used %
       warning: 85
       critical: 95
-    overrides:
-      /bkup:
-        warning: 90
-        critical: 97
+    # Per-mountpoint thresholds
+    overrides: {}
+    #  /bkup/dirvish:
+    #    warning: 90
+    #    critical: 97

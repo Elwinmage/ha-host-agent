@@ -189,3 +189,20 @@ def test_refresh_and_republish(tmp_path):
     runner.request_republish()  # HA restarted
     runner.step()
     assert any(t == DISCOVERY for t, _, _ in transport.messages[count:])
+
+
+def test_released_subject_is_removed(tmp_path):
+    """A persistent subject the collector no longer wants (config change) is removed, not missing."""
+    collector = FakeCollector()
+    runner, clock = make_runner(tmp_path, collector)
+    transport = FakeTransport()
+    runner.transport = transport
+    runner.step()
+    collector.disks = {}
+    collector.keeps = lambda spec: False
+    clock[0] += 61
+    runner.step()
+    discoveries = [json.loads(p) for t, p, _ in transport.messages if t == DISCOVERY]
+    assert discoveries[-2]["cmps"]["disk_a"] == {"p": "binary_sensor"}
+    assert "disk_a" not in discoveries[-1]["cmps"]
+    assert transport.last("host_agent/bkup/state/problem")["state"] == "OFF"

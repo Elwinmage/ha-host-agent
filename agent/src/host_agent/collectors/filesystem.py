@@ -14,6 +14,9 @@ from host_agent.i18n import Translator
 from host_agent.model import CRITICAL, CollectorResult, EntitySpec, Issue, Reading, problem_reading
 
 GIB = 1024**3
+MIB = 1024**2
+# Below this size, free space is reported in MiB (e.g. /boot)
+SMALL_FS_BYTES = 10 * GIB
 
 
 @dataclass
@@ -105,6 +108,9 @@ class FilesystemCollector(Collector):
                 selected[mount.source] = mount
         return sorted(selected.values(), key=lambda m: m.mountpoint)
 
+    def keeps(self, spec: EntitySpec) -> bool:
+        return spec.subject in {f"fs_{mount_slug(mp)}" for mp in self.cfg.required}
+
     def collect(self) -> CollectorResult:
         result = CollectorResult()
         mounted = self.select(parse_mounts(self._read_mounts()))
@@ -119,7 +125,7 @@ class FilesystemCollector(Collector):
                 result.extend(self._unmounted_result(mp))
         return result
 
-    def _specs(self, mp: str, persistent: bool) -> tuple[str, list[EntitySpec]]:
+    def _specs(self, mp: str, persistent: bool, small: bool = False) -> tuple[str, list[EntitySpec]]:
         key = f"fs_{mount_slug(mp)}"
         common: dict[str, Any] = {"subject": key, "subject_label": mp, "persistent": persistent}
         return key, [
@@ -147,16 +153,17 @@ class FilesystemCollector(Collector):
                 platform="sensor",
                 name=self.t("fs_free", mount=mp),
                 device_class="data_size",
-                unit="GiB",
+                unit="MiB" if small else "GiB",
                 state_class="measurement",
-                precision=1,
+                precision=0 if small else 1,
                 **common,
             ),
         ]
 
     def _mount_result(self, mount: Mount, persistent: bool) -> CollectorResult:
-        key, entities = self._specs(mount.mountpoint, persistent)
         usage = self._usage(mount.mountpoint)
+        small = usage.total < SMALL_FS_BYTES
+        key, entities = self._specs(mount.mountpoint, persistent, small)
         thresholds = self.cfg.thresholds_for(mount.mountpoint)
         issues = []
         severity = thresholds.check(usage.used_pct)
@@ -184,7 +191,7 @@ class FilesystemCollector(Collector):
             readings=[
                 problem_reading(key, issues, attrs),
                 Reading(f"{key}_used_pct", usage.used_pct),
-                Reading(f"{key}_free", round(usage.free / GIB, 2)),
+                Reading(f"{key}_free", round(usage.free / (MIB if small else GIB), 2)),
             ],
             issues=issues,
         )

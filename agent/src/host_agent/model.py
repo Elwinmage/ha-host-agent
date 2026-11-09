@@ -66,6 +66,8 @@ class EntitySpec:
     # "problem" entities carry issues; persistent subjects raise "missing" when gone.
     role: str = "metric"
     persistent: bool = False
+    # Name of the collector that produced the entity (set by the runner)
+    source: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
