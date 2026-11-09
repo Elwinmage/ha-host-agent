@@ -39,6 +39,13 @@ if [[ ! -f "${CONF_DIR}/mqtt.secret" ]]; then
     echo "Put the MQTT password in ${CONF_DIR}/mqtt.secret"
 fi
 
+# CLI wrapper: always runs the active version
+cat > /usr/local/bin/host-agent <<'WRAPPER'
+#!/bin/sh
+exec /usr/bin/python3 /opt/host-agent/current/host-agent.pyz --config "${HOST_AGENT_CONFIG:-/etc/host-agent/config.yaml}" "$@"
+WRAPPER
+chmod 0755 /usr/local/bin/host-agent
+
 install -m 0644 "${HERE}/${SERVICE}" "/etc/systemd/system/${SERVICE}"
 systemctl daemon-reload
 systemctl enable "${SERVICE}" >/dev/null

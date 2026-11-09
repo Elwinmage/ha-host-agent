@@ -27,7 +27,7 @@ sudo apt install smartmontools
 sudo agent/packaging/install.sh agent/dist/host-agent.pyz
 sudoedit /etc/host-agent/config.yaml    # mqtt section
 echo 'mqtt-password' | sudo tee /etc/host-agent/mqtt.secret >/dev/null
-sudo -u host-agent python3 /opt/host-agent/current/host-agent.pyz check
+sudo host-agent check
 sudo systemctl restart host-agent && journalctl -u host-agent -f
 ```
 
@@ -37,6 +37,7 @@ Layout:
 |---|---|
 | `/opt/host-agent/versions/<x.y.z>/host-agent.pyz` | installed versions |
 | `/opt/host-agent/current` | symlink to the active version (rollback = move the link) |
+| `/usr/local/bin/host-agent` | CLI wrapper (`python3 /opt/host-agent/current/host-agent.pyz --config /etc/host-agent/config.yaml`) |
 | `/etc/host-agent/config.yaml`, `mqtt.secret` | configuration, `root:host-agent 0640` |
 | `/var/lib/host-agent/state.json` | known disks/filesystems (missing detection) |
 
