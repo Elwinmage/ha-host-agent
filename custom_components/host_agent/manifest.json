@@ -1,13 +1,20 @@
 {
   "domain": "host_agent",
   "name": "Host Agent",
-  "codeowners": ["@Elwinmage"],
+  "codeowners": [
+    "@Elwinmage"
+  ],
   "config_flow": true,
-  "dependencies": ["mqtt", "network"],
+  "dependencies": [
+    "mqtt",
+    "network"
+  ],
   "documentation": "https://github.com/Elwinmage/ha-host-agent",
   "integration_type": "hub",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/Elwinmage/ha-host-agent/issues",
-  "requirements": ["asyncssh>=2.14.0"],
+  "requirements": [
+    "asyncssh>=2.14.0"
+  ],
   "version": "0.2.0"
 }
