@@ -21,8 +21,9 @@ find "${BUILD_DIR}/host_agent" -name '__pycache__' -prune -exec rm -rf {} +
 
 VERSION="$("${PYTHON}" -c "import sys; sys.path.insert(0, '${AGENT_DIR}/src'); import host_agent; print(host_agent.__version__)")"
 mkdir -p "${OUT_DIR}"
+# Own entry point: zipapp's --main would discard the exit status of main()
+printf 'from host_agent.cli import main\n\nraise SystemExit(main())\n' > "${BUILD_DIR}/__main__.py"
 "${PYTHON}" -m zipapp "${BUILD_DIR}" \
-    --main "host_agent.cli:main" \
     --python "/usr/bin/env python3" \
     --compress \
     --output "${OUT_DIR}/host-agent.pyz"

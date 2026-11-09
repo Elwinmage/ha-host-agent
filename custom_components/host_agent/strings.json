@@ -1,0 +1,121 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a host",
+        "description": "SSH access with an account allowed to use sudo (or root). These credentials are used once to create a restricted account for Home Assistant and are not stored.",
+        "data": {
+          "host": "Host",
+          "port": "SSH port",
+          "username": "Username",
+          "password": "Password",
+          "private_key": "Private key (instead of the password)",
+          "sudo_password": "sudo password (if different)"
+        },
+        "data_description": {
+          "private_key": "OpenSSH private key, unencrypted.",
+          "sudo_password": "Defaults to the login password."
+        }
+      },
+      "host_key": {
+        "title": "Confirm the host identity",
+        "description": "Check that this SSH host key fingerprint belongs to **{host}** (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host):\n\n`{fingerprint}`\n\n| | |\n|---|---|\n| Hostname | {hostname} |\n| System | {os} ({arch}) |\n| Python | {python} |\n| smartctl | {smartctl} |\n| Installed agent | {installed} |\n\nThe key is pinned: any later change will be refused."
+      },
+      "agent": {
+        "title": "Agent settings",
+        "description": "MQTT broker the agent on **{hostname}** connects to. Use an address reachable from that host and preferably a dedicated MQTT account.",
+        "data": {
+          "device_name": "Device name",
+          "mqtt_host": "Broker address",
+          "mqtt_port": "Broker port",
+          "mqtt_username": "MQTT username",
+          "mqtt_password": "MQTT password",
+          "language": "Language of entity names and messages",
+          "auto_update": "Update the agent automatically"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate {host}",
+        "description": "Home Assistant can no longer administer the agent (key refused or host key changed). Give an account allowed to use sudo again: a new restricted key is created.",
+        "data": {
+          "username": "Username",
+          "password": "Password",
+          "private_key": "Private key (instead of the password)",
+          "sudo_password": "sudo password (if different)"
+        }
+      },
+      "reauth_host_key": {
+        "title": "Host key changed",
+        "description": "The SSH host key of **{host}** has CHANGED. Only accept it if you reinstalled the system or regenerated its keys.\n\nNew fingerprint: `{fingerprint}`"
+      }
+    },
+    "progress": {
+      "install": "Setting up {hostname}: accounts, helper, agent installation, then waiting for the agent to report over MQTT (up to 2 minutes)."
+    },
+    "error": {
+      "auth_required": "Give a password or a private key.",
+      "invalid_auth": "Authentication refused.",
+      "invalid_key": "The private key cannot be read (it must be an unencrypted OpenSSH key).",
+      "cannot_connect": "Cannot connect over SSH.",
+      "sudo_failed": "This account cannot use sudo with the given password.",
+      "unknown": "Unexpected error, see the logs."
+    },
+    "abort": {
+      "already_configured": "This host is already configured.",
+      "reauth_successful": "Re-authentication successful.",
+      "no_systemd": "systemd is required on the host.",
+      "python_too_old": "Python 3.11 or newer is required on the host (found {python}).",
+      "bundle_missing": "The agent archive is missing from the integration: {detail}",
+      "host_key_changed": "The SSH host key changed during the setup.",
+      "ssh_failed": "SSH error: {detail}",
+      "bootstrap_failed": "Preparation of the host failed: {detail}",
+      "admin_login_failed": "The restricted account 'host-agent-admin' cannot log in ({detail}). Check AllowUsers/AllowGroups in sshd_config.",
+      "install_failed": "Installation failed: {detail}",
+      "agent_not_reporting": "The agent is installed but does not report over MQTT. Check that {detail} is reachable from the host and the MQTT credentials, then retry.",
+      "unknown": "Unexpected error: {detail}"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Agent options",
+        "description": "Changes to the language or collectors are validated and applied on the host right away. {detail}",
+        "data": {
+          "auto_update": "Update the agent automatically",
+          "language": "Language",
+          "collectors": "Collectors (YAML)"
+        },
+        "data_description": {
+          "collectors": "`smart` and `filesystem` sections, same syntax as the agent configuration file. Empty: defaults."
+        }
+      }
+    },
+    "error": {
+      "invalid_collectors": "Invalid collectors section.",
+      "configure_failed": "The agent refused the configuration.",
+      "not_loaded": "The integration is not loaded."
+    }
+  },
+  "entity": {
+    "update": {
+      "agent": {
+        "name": "Agent"
+      }
+    },
+    "button": {
+      "restart_agent": {
+        "name": "Restart agent"
+      }
+    }
+  },
+  "issues": {
+    "host_key_changed": {
+      "title": "SSH host key changed on {host}",
+      "description": "Home Assistant refused to connect to {host} because its SSH host key changed. This happens after a reinstallation, but can also reveal an attack. Re-authenticate the integration to accept the new key."
+    },
+    "protocol_mismatch": {
+      "title": "Agent on {host} is incompatible",
+      "description": "The agent uses protocol {agent}, this integration expects {integration}. Install the agent update from the device page."
+    }
+  }
+}

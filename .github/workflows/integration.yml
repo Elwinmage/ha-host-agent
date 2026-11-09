@@ -1,0 +1,48 @@
+name: Integration
+
+on:
+  push:
+    paths: ["custom_components/**", "tests/**", "agent/**", ".github/workflows/integration.yml"]
+  pull_request:
+    paths: ["custom_components/**", "tests/**", "agent/**", ".github/workflows/integration.yml"]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install ruff
+      - run: ruff check custom_components tests
+      - run: ruff format --check custom_components tests
+      - run: sudo apt-get install -y shellcheck
+      - run: shellcheck -S warning custom_components/host_agent/remote/host-agent-admin custom_components/host_agent/remote/bootstrap.sh
+      - name: Versions are aligned
+        run: |
+          agent=$(sed -nE 's/^__version__ = "([^"]+)"/\1/p' agent/src/host_agent/__init__.py)
+          manifest=$(python -c "import json; print(json.load(open('custom_components/host_agent/manifest.json'))['version'])")
+          test "$agent" = "$manifest" || { echo "agent $agent != manifest $manifest"; exit 1; }
+
+  hass:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pytest-homeassistant-custom-component asyncssh mypy
+      - run: python -m mypy custom_components/host_agent --ignore-missing-imports --follow-imports=silent
+      - run: python -m pytest tests/integration -q
+
+  helper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pytest pyyaml paho-mqtt
+      # the helper sets file ownership: run as root
+      - run: sudo -E env "PATH=$PATH" python -m pytest tests/remote -q -p no:cacheprovider

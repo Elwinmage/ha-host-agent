@@ -1,0 +1,120 @@
+name: Release
+
+# Manual release: Actions > Release > Run workflow, enter the version.
+# Bumps the agent and integration versions, tags, bundles the agent in the
+# integration and publishes the GitHub release used by HACS (host_agent.zip).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version (x.y.z, without v)"
+        required: true
+        type: string
+      prerelease:
+        description: "Pre-release (HACS shows it only to users who enable beta versions)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Validate version
+        run: |
+          [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-?(a|b|rc)[0-9]+)?$ ]] \
+            || { echo "::error::invalid version '${{ inputs.version }}'"; exit 1; }
+          git fetch --tags --quiet
+          if git rev-parse -q --verify "refs/tags/v${{ inputs.version }}" >/dev/null; then
+            echo "::error::tag v${{ inputs.version }} already exists"; exit 1
+          fi
+      - run: pip install -e './agent[dev]' pytest-homeassistant-custom-component asyncssh
+      - name: Agent tests
+        working-directory: agent
+        run: pytest -q
+      - name: Integration tests
+        run: python -m pytest tests/integration -q
+      - name: Helper tests (root)
+        run: sudo -E env "PATH=$PATH" python -m pytest tests/remote -q -p no:cacheprovider
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          # oldest supported Python on the hosts: the archive must run there
+          python-version: "3.11"
+
+      - name: Bump versions
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          sed -i -E "s/^__version__ = \"[^\"]+\"/__version__ = \"${VERSION}\"/" agent/src/host_agent/__init__.py
+          python - <<'EOF'
+          import json, os
+          path = "custom_components/host_agent/manifest.json"
+          manifest = json.load(open(path))
+          manifest["version"] = os.environ["VERSION"]
+          with open(path, "w") as fh:
+              json.dump(manifest, fh, indent=2)
+              fh.write("\n")
+          EOF
+          git diff --stat
+
+      - name: Commit and tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git commit -am "Release v${VERSION}"
+          fi
+          git tag -a "v${VERSION}" -m "v${VERSION}"
+          git push origin "HEAD:${GITHUB_REF_NAME}" "v${VERSION}"
+
+      - name: Bundle the agent in the integration
+        run: scripts/bundle_agent.sh
+
+      - name: Check the archive
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          test "$(python3 custom_components/host_agent/agent/host-agent.pyz version | awk '{print $2}')" = "${VERSION}"
+          if python3 custom_components/host_agent/agent/host-agent.pyz --config /nonexistent validate; then
+            echo "::error::exit status not propagated"; exit 1
+          fi
+
+      - name: Build HACS archive
+        run: |
+          cd custom_components/host_agent
+          zip -qr "${GITHUB_WORKSPACE}/host_agent.zip" . -x '__pycache__/*' '*/__pycache__/*' '*.pyc'
+          unzip -l "${GITHUB_WORKSPACE}/host_agent.zip" | tail -n 3
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          flags=()
+          [[ "${{ inputs.prerelease }}" == "true" ]] && flags+=(--prerelease)
+          gh release create "v${VERSION}" \
+            host_agent.zip \
+            custom_components/host_agent/agent/host-agent.pyz \
+            custom_components/host_agent/agent/host-agent.pyz.sha256 \
+            --title "v${VERSION}" --generate-notes --verify-tag "${flags[@]}"

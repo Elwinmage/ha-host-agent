@@ -1,0 +1,7 @@
+{
+  "name": "Host Agent",
+  "homeassistant": "2025.10.0",
+  "zip_release": true,
+  "filename": "host_agent.zip",
+  "render_readme": true
+}

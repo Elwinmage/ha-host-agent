@@ -1,0 +1,121 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Ajouter un hôte",
+        "description": "Accès SSH avec un compte autorisé à utiliser sudo (ou root). Ces identifiants servent une seule fois à créer un compte restreint pour Home Assistant et ne sont pas conservés.",
+        "data": {
+          "host": "Hôte",
+          "port": "Port SSH",
+          "username": "Utilisateur",
+          "password": "Mot de passe",
+          "private_key": "Clé privée (à la place du mot de passe)",
+          "sudo_password": "Mot de passe sudo (si différent)"
+        },
+        "data_description": {
+          "private_key": "Clé privée OpenSSH, non chiffrée.",
+          "sudo_password": "Par défaut, le mot de passe de connexion."
+        }
+      },
+      "host_key": {
+        "title": "Confirmer l'identité de l'hôte",
+        "description": "Vérifiez que cette empreinte de clé SSH est bien celle de **{host}** (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` sur l'hôte) :\n\n`{fingerprint}`\n\n| | |\n|---|---|\n| Nom | {hostname} |\n| Système | {os} ({arch}) |\n| Python | {python} |\n| smartctl | {smartctl} |\n| Agent installé | {installed} |\n\nLa clé est mémorisée : tout changement ultérieur sera refusé."
+      },
+      "agent": {
+        "title": "Réglages de l'agent",
+        "description": "Broker MQTT auquel l'agent de **{hostname}** se connecte. Utilisez une adresse joignable depuis cet hôte et de préférence un compte MQTT dédié.",
+        "data": {
+          "device_name": "Nom de l'appareil",
+          "mqtt_host": "Adresse du broker",
+          "mqtt_port": "Port du broker",
+          "mqtt_username": "Utilisateur MQTT",
+          "mqtt_password": "Mot de passe MQTT",
+          "language": "Langue des entités et des messages",
+          "auto_update": "Mettre à jour l'agent automatiquement"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Réauthentifier {host}",
+        "description": "Home Assistant ne peut plus administrer l'agent (clé refusée ou clé d'hôte changée). Indiquez de nouveau un compte autorisé à utiliser sudo : une nouvelle clé restreinte sera créée.",
+        "data": {
+          "username": "Utilisateur",
+          "password": "Mot de passe",
+          "private_key": "Clé privée (à la place du mot de passe)",
+          "sudo_password": "Mot de passe sudo (si différent)"
+        }
+      },
+      "reauth_host_key": {
+        "title": "Clé d'hôte modifiée",
+        "description": "La clé SSH de **{host}** a CHANGÉ. Ne l'acceptez que si vous avez réinstallé le système ou régénéré ses clés.\n\nNouvelle empreinte : `{fingerprint}`"
+      }
+    },
+    "progress": {
+      "install": "Préparation de {hostname} : comptes, assistant, installation de l'agent, puis attente de son premier message MQTT (jusqu'à 2 minutes)."
+    },
+    "error": {
+      "auth_required": "Indiquez un mot de passe ou une clé privée.",
+      "invalid_auth": "Authentification refusée.",
+      "invalid_key": "Clé privée illisible (clé OpenSSH non chiffrée attendue).",
+      "cannot_connect": "Connexion SSH impossible.",
+      "sudo_failed": "Ce compte ne peut pas utiliser sudo avec ce mot de passe.",
+      "unknown": "Erreur inattendue, voir les journaux."
+    },
+    "abort": {
+      "already_configured": "Cet hôte est déjà configuré.",
+      "reauth_successful": "Réauthentification réussie.",
+      "no_systemd": "systemd est requis sur l'hôte.",
+      "python_too_old": "Python 3.11 ou plus récent est requis sur l'hôte (trouvé : {python}).",
+      "bundle_missing": "L'archive de l'agent est absente de l'intégration : {detail}",
+      "host_key_changed": "La clé SSH de l'hôte a changé pendant l'installation.",
+      "ssh_failed": "Erreur SSH : {detail}",
+      "bootstrap_failed": "La préparation de l'hôte a échoué : {detail}",
+      "admin_login_failed": "Le compte restreint « host-agent-admin » ne peut pas se connecter ({detail}). Vérifiez AllowUsers/AllowGroups dans sshd_config.",
+      "install_failed": "L'installation a échoué : {detail}",
+      "agent_not_reporting": "L'agent est installé mais ne publie rien en MQTT. Vérifiez que {detail} est joignable depuis l'hôte et les identifiants MQTT, puis recommencez.",
+      "unknown": "Erreur inattendue : {detail}"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options de l'agent",
+        "description": "Les changements de langue ou de collecteurs sont validés puis appliqués immédiatement sur l'hôte. {detail}",
+        "data": {
+          "auto_update": "Mettre à jour l'agent automatiquement",
+          "language": "Langue",
+          "collectors": "Collecteurs (YAML)"
+        },
+        "data_description": {
+          "collectors": "Sections `smart` et `filesystem`, même syntaxe que le fichier de configuration de l'agent. Vide : valeurs par défaut."
+        }
+      }
+    },
+    "error": {
+      "invalid_collectors": "Section des collecteurs invalide.",
+      "configure_failed": "L'agent a refusé la configuration.",
+      "not_loaded": "L'intégration n'est pas chargée."
+    }
+  },
+  "entity": {
+    "update": {
+      "agent": {
+        "name": "Agent"
+      }
+    },
+    "button": {
+      "restart_agent": {
+        "name": "Redémarrer l'agent"
+      }
+    }
+  },
+  "issues": {
+    "host_key_changed": {
+      "title": "Clé SSH modifiée sur {host}",
+      "description": "Home Assistant a refusé de se connecter à {host} car sa clé SSH a changé. C'est normal après une réinstallation, mais cela peut aussi révéler une attaque. Réauthentifiez l'intégration pour accepter la nouvelle clé."
+    },
+    "protocol_mismatch": {
+      "title": "Agent incompatible sur {host}",
+      "description": "L'agent utilise le protocole {agent}, cette intégration attend le {integration}. Installez la mise à jour de l'agent depuis la page de l'appareil."
+    }
+  }
+}

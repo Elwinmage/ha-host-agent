@@ -239,6 +239,12 @@ def cmd_remove(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_validate(cfg: Config, _args: argparse.Namespace) -> int:
+    """Configuration already parsed by main(): only report success (used before deployment)."""
+    print(f"Configuration OK (node_id={cfg.node_id})")
+    return 0
+
+
 def cmd_version(_cfg: Config | None, _args: argparse.Namespace) -> int:
     print(f"ha-host-agent {__version__} (protocol {PROTOCOL_VERSION})")
     return 0
@@ -273,6 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--apply", action="store_true")
     p = sub.add_parser("remove", help="delete this device from Home Assistant")
     p.add_argument("--yes", action="store_true")
+    sub.add_parser("validate", help="validate the configuration file and exit")
     sub.add_parser("version")
     return parser
 
@@ -284,6 +291,7 @@ COMMANDS = {
     "forget": cmd_forget,
     "cleanup-legacy": cmd_cleanup_legacy,
     "remove": cmd_remove,
+    "validate": cmd_validate,
 }
 
 

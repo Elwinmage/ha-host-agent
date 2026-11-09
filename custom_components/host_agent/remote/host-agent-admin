@@ -1,0 +1,274 @@
+#!/bin/bash
+# host-agent-admin: privileged helper used by the Home Assistant integration.
+#
+# Installed root:root 0755 in /usr/local/lib/host-agent/ by the bootstrap. The
+# "host-agent-admin" SSH account may only run THIS script through sudo; every
+# argument is validated here, files are only taken from the account's incoming
+# directory and checked (sha256, version, configuration) before use.
+#
+# Commands:
+#   status                      key=value report
+#   install VERSION SHA256      install incoming/host-agent.pyz (+ incoming config), restart,
+#                               roll back automatically when the service does not stay up
+#   configure                   apply incoming/config.yaml (+ mqtt.secret), restart, roll back on failure
+#   rollback                    re-activate the previous version
+#   restart
+#   read-config                 print /etc/host-agent/config.yaml (no secret)
+#   uninstall [--purge]         stop and remove the agent (--purge: configuration and state too)
+set -euo pipefail
+umask 022
+# shellcheck disable=SC2012  # version directory names are validated, ls is fine
+
+# Overridable for tests only (sudo resets the environment in production)
+ROOT="${HOST_AGENT_ROOT:-}"
+SYSTEMCTL="${HOST_AGENT_SYSTEMCTL:-systemctl}"
+PYTHON="${HOST_AGENT_PYTHON:-/usr/bin/python3}"
+STABLE_WAIT="${HOST_AGENT_STABLE_WAIT:-8}"
+
+PREFIX="${ROOT}/opt/host-agent"
+CONF_DIR="${ROOT}/etc/host-agent"
+STATE_DIR="${ROOT}/var/lib/host-agent"
+ADMIN_HOME="${ROOT}/var/lib/host-agent-admin"
+INCOMING="${ADMIN_HOME}/incoming"
+UNIT="${ROOT}/etc/systemd/system/host-agent.service"
+WRAPPER="${ROOT}/usr/local/bin/host-agent"
+SERVICE=host-agent.service
+KEEP_VERSIONS=3
+LOCK="${ROOT}/run/host-agent-admin.lock"
+
+die() { echo "ERROR: $*" >&2; exit "${2:-1}"; }
+
+mkdir -p "$(dirname "${LOCK}")"
+exec 9>"${LOCK}"
+flock -w 120 9 || die "another operation is running" 75
+
+# Incoming files are written by the unprivileged admin account: refuse links and
+# special files so root never follows a path chosen by that account.
+check_incoming() {
+    local f="$1"
+    [[ -e "${f}" || -L "${f}" ]] || return 0
+    [[ -f "${f}" && ! -L "${f}" ]] || die "refusing non regular file ${f}" 65
+    [[ "$(stat -c %h "${f}")" == "1" ]] || die "refusing hard-linked file ${f}" 65
+}
+
+check_all_incoming() {
+    [[ -d "${INCOMING}" && ! -L "${INCOMING}" ]] || die "missing incoming directory" 66
+    local f
+    for f in host-agent.pyz config.yaml mqtt.secret; do check_incoming "${INCOMING}/${f}"; done
+}
+
+group_exists() { getent group host-agent >/dev/null 2>&1; }
+
+current_version() {
+    local target
+    target="$(readlink "${PREFIX}/current" 2>/dev/null || true)"
+    if [[ -n "${target}" ]]; then basename "${target}"; fi
+}
+
+previous_version() { cat "${PREFIX}/previous" 2>/dev/null || true; }
+
+service_restarts() { "${SYSTEMCTL}" show -p NRestarts --value "${SERVICE}" 2>/dev/null || echo 0; }
+
+# Restart and make sure the service stays up for STABLE_WAIT seconds
+restart_and_check() {
+    "${SYSTEMCTL}" daemon-reload || true
+    "${SYSTEMCTL}" enable "${SERVICE}" >/dev/null 2>&1 || true
+    # never leak the lock descriptor to spawned processes
+    "${SYSTEMCTL}" restart "${SERVICE}" 9>&- || return 1
+    local before after
+    before="$(service_restarts)"
+    sleep "${STABLE_WAIT}"
+    after="$(service_restarts)"
+    "${SYSTEMCTL}" is-active --quiet "${SERVICE}" && [[ "${before}" == "${after}" ]]
+}
+
+journal_tail() { journalctl -u "${SERVICE}" -n 20 --no-pager 2>/dev/null >&2 || true; }
+
+write_wrapper() {
+    mkdir -p "$(dirname "${WRAPPER}")"
+    cat > "${WRAPPER}" <<EOF
+#!/bin/sh
+exec ${PYTHON} /opt/host-agent/current/host-agent.pyz --config "\${HOST_AGENT_CONFIG:-/etc/host-agent/config.yaml}" "\$@"
+EOF
+    chmod 0755 "${WRAPPER}"
+}
+
+# Validate incoming config (if any) with the given pyz; secret passed through env
+validate_incoming_config() {
+    local pyz="$1"
+    [[ -f "${INCOMING}/config.yaml" ]] || return 0
+    local secret=""
+    [[ -f "${INCOMING}/mqtt.secret" ]] && secret="$(cat "${INCOMING}/mqtt.secret")"
+    [[ -z "${secret}" && -f "${CONF_DIR}/mqtt.secret" ]] && secret="$(cat "${CONF_DIR}/mqtt.secret")"
+    HOST_AGENT_MQTT_PASSWORD="${secret:-unset}" "${PYTHON}" "${pyz}" --config "${INCOMING}/config.yaml" validate >&2 \
+        || die "invalid agent configuration" 65
+}
+
+# Install incoming config files, keeping a backup for rollback
+apply_incoming_config() {
+    mkdir -p "${CONF_DIR}"
+    local owner_group="root"
+    group_exists && owner_group="host-agent"
+    chown "root:${owner_group}" "${CONF_DIR}" 2>/dev/null || true
+    chmod 0750 "${CONF_DIR}"
+    local f
+    for f in config.yaml mqtt.secret; do
+        if [[ -f "${INCOMING}/${f}" ]]; then
+            [[ -f "${CONF_DIR}/${f}" ]] && cp -p "${CONF_DIR}/${f}" "${CONF_DIR}/${f}.bak"
+            install -m 0640 -o root -g "${owner_group}" "${INCOMING}/${f}" "${CONF_DIR}/${f}"
+            rm -f "${INCOMING}/${f}"
+        fi
+    done
+}
+
+restore_config_backup() {
+    local f
+    for f in config.yaml mqtt.secret; do
+        [[ -f "${CONF_DIR}/${f}.bak" ]] && mv -f "${CONF_DIR}/${f}.bak" "${CONF_DIR}/${f}"
+    done
+    return 0
+}
+
+drop_config_backup() { rm -f "${CONF_DIR}/config.yaml.bak" "${CONF_DIR}/mqtt.secret.bak"; }
+
+prune_versions() {
+    local keep_current keep_previous
+    keep_current="$(current_version)"
+    keep_previous="$(previous_version)"
+    # newest first, by modification time
+    local count=0 dir name
+    while IFS= read -r dir; do
+        name="$(basename "${dir}")"
+        count=$((count + 1))
+        if (( count > KEEP_VERSIONS )) && [[ "${name}" != "${keep_current}" && "${name}" != "${keep_previous}" ]]; then
+            rm -rf "${dir}"
+        fi
+    done < <(ls -1dt "${PREFIX}"/versions/*/ 2>/dev/null | sed 's#/$##')
+}
+
+cmd_status() {
+    echo "version=$(current_version)"
+    echo "previous=$(previous_version)"
+    echo "versions=$(ls -1 "${PREFIX}/versions" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+    echo "active=$("${SYSTEMCTL}" is-active "${SERVICE}" 2>/dev/null || true)"
+    echo "enabled=$("${SYSTEMCTL}" is-enabled "${SERVICE}" 2>/dev/null || true)"
+    echo "python=$("${PYTHON}" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null || true)"
+    echo "smartctl=$( (smartctl --version 2>/dev/null || /usr/sbin/smartctl --version 2>/dev/null) | awk 'NR==1{print $2}')"
+    echo "config=$([[ -f "${CONF_DIR}/config.yaml" ]] && echo yes || echo no)"
+}
+
+cmd_install() {
+    local version="${1:-}" sha="${2:-}"
+    [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-]?[A-Za-z0-9.]+)?$ ]] || die "invalid version '${version}'" 64
+    [[ "${sha}" =~ ^[0-9a-f]{64}$ ]] || die "invalid sha256" 64
+    local src="${INCOMING}/host-agent.pyz"
+    [[ -f "${src}" ]] || die "missing ${src}" 66
+    echo "${sha}  ${src}" | sha256sum -c --status - || die "checksum mismatch" 65
+
+    local reported
+    reported="$("${PYTHON}" "${src}" version 2>/dev/null | awk '{print $2}')"
+    [[ "${reported}" == "${version}" ]] || die "archive reports version '${reported}', expected '${version}'" 65
+    validate_incoming_config "${src}"
+
+    local previous
+    previous="$(current_version)"
+    mkdir -p "${PREFIX}/versions/${version}"
+    install -m 0644 -o root -g root "${src}" "${PREFIX}/versions/${version}/host-agent.pyz"
+    rm -f "${src}"
+    if [[ -n "${previous}" && "${previous}" != "${version}" ]]; then
+        echo "${previous}" > "${PREFIX}/previous"
+    fi
+    ln -sfn "${PREFIX}/versions/${version}" "${PREFIX}/current.new"
+    mv -Tf "${PREFIX}/current.new" "${PREFIX}/current"
+    apply_incoming_config
+    write_wrapper
+
+    if restart_and_check; then
+        drop_config_backup
+        prune_versions
+        echo "INSTALLED ${version}"
+        return 0
+    fi
+
+    echo "Service failed with ${version}" >&2
+    journal_tail
+    restore_config_backup
+    if [[ -n "${previous}" && "${previous}" != "${version}" && -d "${PREFIX}/versions/${previous}" ]]; then
+        ln -sfn "${PREFIX}/versions/${previous}" "${PREFIX}/current.new"
+        mv -Tf "${PREFIX}/current.new" "${PREFIX}/current"
+        restart_and_check || true
+        echo "ROLLED_BACK ${previous}"
+    fi
+    exit 3
+}
+
+cmd_configure() {
+    [[ -f "${INCOMING}/config.yaml" || -f "${INCOMING}/mqtt.secret" ]] || die "nothing to configure" 66
+    local version
+    version="$(current_version)"
+    [[ -n "${version}" ]] || die "agent not installed" 69
+    validate_incoming_config "${PREFIX}/current/host-agent.pyz"
+    apply_incoming_config
+    if restart_and_check; then
+        drop_config_backup
+        echo "CONFIGURED"
+        return 0
+    fi
+    journal_tail
+    restore_config_backup
+    restart_and_check || true
+    echo "CONFIG_ROLLED_BACK"
+    exit 3
+}
+
+cmd_rollback() {
+    local previous current
+    previous="$(previous_version)"
+    current="$(current_version)"
+    [[ -n "${previous}" && -d "${PREFIX}/versions/${previous}" ]] || die "no previous version" 69
+    ln -sfn "${PREFIX}/versions/${previous}" "${PREFIX}/current.new"
+    mv -Tf "${PREFIX}/current.new" "${PREFIX}/current"
+    [[ -n "${current}" ]] && echo "${current}" > "${PREFIX}/previous"
+    restart_and_check || { journal_tail; die "service failed after rollback" 3; }
+    echo "ROLLED_BACK ${previous}"
+}
+
+cmd_restart() {
+    restart_and_check || { journal_tail; die "service failed to restart" 3; }
+    echo "RESTARTED"
+}
+
+cmd_read_config() {
+    [[ -f "${CONF_DIR}/config.yaml" ]] || die "no configuration" 66
+    cat "${CONF_DIR}/config.yaml"
+}
+
+cmd_uninstall() {
+    local purge="${1:-}"
+    "${SYSTEMCTL}" disable --now "${SERVICE}" >/dev/null 2>&1 || true
+    rm -f "${UNIT}" "${WRAPPER}"
+    "${SYSTEMCTL}" daemon-reload >/dev/null 2>&1 || true
+    rm -rf "${PREFIX}"
+    if [[ "${purge}" == "--purge" ]]; then
+        rm -rf "${CONF_DIR}" "${STATE_DIR}"
+        # Revoke Home Assistant's access last
+        rm -f "${ROOT}/etc/sudoers.d/host-agent-admin" "${ADMIN_HOME}/.ssh/authorized_keys"
+    fi
+    echo "UNINSTALLED"
+}
+
+command="${1:-}"
+shift || true
+case "${command}" in
+    install|configure) check_all_incoming ;;
+esac
+case "${command}" in
+    status) cmd_status ;;
+    install) cmd_install "$@" ;;
+    configure) cmd_configure ;;
+    rollback) cmd_rollback ;;
+    restart) cmd_restart ;;
+    read-config) cmd_read_config ;;
+    uninstall) cmd_uninstall "$@" ;;
+    *) die "usage: host-agent-admin status|install VERSION SHA256|configure|rollback|restart|read-config|uninstall [--purge]" 64 ;;
+esac
