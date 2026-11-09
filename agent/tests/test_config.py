@@ -48,6 +48,8 @@ def test_defaults():
         ({"collectors": {"smart": {"temperature": {"warning": 70, "critical": 60}}}}, "lower"),
         ({"mqtt": {"port": "1883"}}, "invalid type"),
         ({"collectors": {"smart": {"devices": [42]}}}, "devices"),
+        ({"collectors": {"smart": {"selftest": {"window": "25:00-03:00"}}}}, "window"),
+        ({"collectors": {"smart": {"selftest": {"window": "3h-5h"}}}}, "window"),
     ],
 )
 def test_invalid(data, message):

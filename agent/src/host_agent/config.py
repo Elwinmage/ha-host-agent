@@ -6,6 +6,7 @@ import os
 import re
 import socket
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -97,6 +98,36 @@ class SmartDevice:
 
 
 @dataclass
+class SelfTestSchedule:
+    """Self-tests started by the agent itself (no smartd needed)."""
+
+    enabled: bool = True
+    short_interval_hours: int = 24  # 0 = never
+    long_interval_days: int = 7  # 0 = never
+    # Local time window "HH:MM-HH:MM" (may cross midnight); empty = any time
+    window: str = "02:00-06:00"
+
+    def in_window(self, now: datetime) -> bool:
+        if not self.window:
+            return True
+        start, end = _parse_window(self.window)
+        minutes = now.hour * 60 + now.minute
+        if start <= end:
+            return start <= minutes < end
+        return minutes >= start or minutes < end
+
+
+def _parse_window(value: str) -> tuple[int, int]:
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})", value.strip())
+    if not match:
+        raise ConfigError(f"Invalid time window '{value}' (expected HH:MM-HH:MM)")
+    h1, m1, h2, m2 = (int(g) for g in match.groups())
+    if h1 > 23 or h2 > 23 or m1 > 59 or m2 > 59:
+        raise ConfigError(f"Invalid time window '{value}'")
+    return h1 * 60 + m1, h2 * 60 + m2
+
+
+@dataclass
 class SmartConfig:
     enabled: bool = True
     interval: int = 3600
@@ -110,6 +141,7 @@ class SmartConfig:
     ata_attribute_thresholds: dict[int, int] = field(default_factory=lambda: {5: 0, 187: 0, 197: 0, 198: 0})
     nvme_wear: Thresholds = field(default_factory=lambda: Thresholds(90, 100))
     ignore_error_log: bool = False
+    selftest: SelfTestSchedule = field(default_factory=SelfTestSchedule)
 
 
 @dataclass
@@ -264,7 +296,25 @@ def _parse_smart(data: Any) -> SmartConfig:
         ata_attribute_thresholds=ata_thr,
         nvme_wear=_thresholds(section.get("nvme_wear"), d.nvme_wear, f"{path}.nvme_wear"),
         ignore_error_log=_typed(section, "ignore_error_log", bool, d.ignore_error_log, path),
+        selftest=_parse_selftest(section.get("selftest"), f"{path}.selftest"),
     )
+
+
+def _parse_selftest(data: Any, path: str) -> SelfTestSchedule:
+    section = _section(data, path)
+    _check_keys(section, set(SelfTestSchedule.__dataclass_fields__), path)
+    d = SelfTestSchedule()
+    schedule = SelfTestSchedule(
+        enabled=_typed(section, "enabled", bool, d.enabled, path),
+        short_interval_hours=_typed(section, "short_interval_hours", int, d.short_interval_hours, path),
+        long_interval_days=_typed(section, "long_interval_days", int, d.long_interval_days, path),
+        window=_typed(section, "window", str, d.window, path),
+    )
+    if schedule.short_interval_hours < 0 or schedule.long_interval_days < 0:
+        raise ConfigError(f"'{path}': intervals must be positive (0 disables)")
+    if schedule.window:
+        _parse_window(schedule.window)
+    return schedule
 
 
 def _parse_filesystem(data: Any) -> FilesystemConfig:

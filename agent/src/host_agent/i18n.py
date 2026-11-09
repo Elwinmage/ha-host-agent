@@ -16,6 +16,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "disk_health": "Disk {label}",
         "disk_temperature": "Temperature {label}",
         "disk_selftest_age": "Last successful self-test {label}",
+        "disk_selftest_short": "Start short self-test {label}",
+        "disk_selftest_long": "Start long self-test {label}",
         # Filesystem entities
         "fs_problem": "Filesystem {mount}",
         "fs_used_pct": "Used space {mount}",
@@ -52,6 +54,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "disk_health": "Disque {label}",
         "disk_temperature": "Température {label}",
         "disk_selftest_age": "Dernier auto-test réussi {label}",
+        "disk_selftest_short": "Lancer un auto-test court {label}",
+        "disk_selftest_long": "Lancer un auto-test long {label}",
         "fs_problem": "Système de fichiers {mount}",
         "fs_used_pct": "Espace utilisé {mount}",
         "fs_free": "Espace libre {mount}",

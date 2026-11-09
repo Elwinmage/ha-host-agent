@@ -60,6 +60,13 @@ class Collector(ABC):
         """
         return True
 
+    def on_command(self, key: str) -> bool:
+        """Handle a button press on one of this collector's entities.
+
+        Returns True when a collection should run right away.
+        """
+        return False
+
     @abstractmethod
     def collect(self) -> CollectorResult:
         """Collect current data. May raise; the runner handles failures."""

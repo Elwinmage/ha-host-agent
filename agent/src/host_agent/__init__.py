@@ -1,6 +1,6 @@
 """ha-host-agent: host monitoring agent publishing to Home Assistant over MQTT."""
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 # Version of the MQTT contract (discovery layout, topics, attribute schema).
 # Bumped only on breaking changes; the HA integration checks it.

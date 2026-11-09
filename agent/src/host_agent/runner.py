@@ -126,8 +126,17 @@ class Runner:
                     self._force_collect = True
             elif name == "forget":
                 self.forget(payload.strip())
+            elif self._dispatch_button(name):
+                self._force_collect = True
             else:
                 _LOGGER.debug("Ignoring unknown command %s", name)
+
+    def _dispatch_button(self, key: str) -> bool:
+        spec = self.state.known.get(key)
+        if spec is None or spec.platform != "button" or spec.source is None:
+            return False
+        owner = next((c for c in self.collectors if c.name == spec.source), None)
+        return bool(owner and owner.on_command(key))
 
     def forget(self, subject: str) -> list[str]:
         """Drop a persistent subject (e.g. a disk that was removed on purpose)."""

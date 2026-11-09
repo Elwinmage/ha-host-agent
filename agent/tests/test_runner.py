@@ -206,3 +206,24 @@ def test_released_subject_is_removed(tmp_path):
     assert discoveries[-2]["cmps"]["disk_a"] == {"p": "binary_sensor"}
     assert "disk_a" not in discoveries[-1]["cmps"]
     assert transport.last("host_agent/bkup/state/problem")["state"] == "OFF"
+
+
+def test_button_dispatched_to_owner(tmp_path):
+    collector = FakeCollector()
+    pressed = []
+    original = collector.collect
+
+    def with_button():
+        result = original()
+        result.entities.append(EntitySpec("disk_a_selftest_short", "button", "Start", subject="disk_a"))
+        return result
+
+    collector.collect = with_button
+    collector.on_command = lambda key: pressed.append(key) or True
+    runner, _ = make_runner(tmp_path, collector)
+    runner.transport = FakeTransport()
+    runner.step()
+    runner.handle_command("disk_a_selftest_short", "PRESS")
+    runner.handle_command("unknown_button", "PRESS")
+    runner.step()
+    assert pressed == ["disk_a_selftest_short"]

@@ -6,7 +6,9 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from host_agent.collectors.base import Collector, CommandRunner, run_command
@@ -55,6 +57,9 @@ NVME_CRITICAL_FLAGS = {
     5: "persistent memory region read-only",
 }
 
+# Minimum delay between two scheduled start attempts on the same disk (seconds)
+AUTO_RETRY_DELAY = 6 * 3600
+
 # Standard ATA self-test log stores a 16-bit power-on-hours timestamp
 ATA_LIFETIME_WRAP = 65536
 
@@ -64,6 +69,10 @@ class SelfTestInfo:
     supported: bool = False
     in_progress: bool = False
     poll_minutes: int = 0
+    short_minutes: int = 2
+    long_minutes: int = 60
+    # power-on hours since the last attempt (any outcome) of each kind
+    last_attempt_hours: dict[str, int] = field(default_factory=dict)
     last_ok_hours: int | None = None  # power-on hours elapsed since last successful test
     aborted_since_ok: int = 0
     last_result: str | None = None
@@ -105,6 +114,7 @@ class DiskReport:
             "selftest_in_progress": self.selftest.in_progress,
             "selftest_last_result": self.selftest.last_result,
             "selftests_aborted_since_last_ok": self.selftest.aborted_since_ok,
+            "selftest_last_attempt_hours": self.selftest.last_attempt_hours,
         }
         attrs.update(self.extra)
         return attrs
@@ -141,9 +151,18 @@ def _parse_ata_selftest(data: dict[str, Any], poh: int | None) -> SelfTestInfo:
         info.in_progress = True
     polling = (smart_data.get("self_test") or {}).get("polling_minutes") or {}
     info.poll_minutes = int(polling.get("extended") or polling.get("short") or 0)
+    info.short_minutes = int(polling.get("short") or info.short_minutes)
+    info.long_minutes = int(polling.get("extended") or info.long_minutes)
 
     log = data.get("ata_smart_self_test_log") or {}
     table = ((log.get("extended") or {}).get("table")) or ((log.get("standard") or {}).get("table")) or []
+
+    for entry in table:
+        # 1/2 = offline short/extended, 129/130 = same in captive mode
+        kind = {1: "short", 2: "long"}.get(int((entry.get("type") or {}).get("value") or 0) & 0x7F)
+        lifetime = entry.get("lifetime_hours")
+        if kind and kind not in info.last_attempt_hours and isinstance(lifetime, int) and poh is not None:
+            info.last_attempt_hours[kind] = (poh - lifetime) % ATA_LIFETIME_WRAP
 
     latest_meaningful: dict[str, Any] | None = None
     for entry in table:
@@ -184,6 +203,12 @@ def _parse_nvme_selftest(data: dict[str, Any], poh: int | None) -> SelfTestInfo:
     info.poll_minutes = 10
 
     table = log.get("table") or []
+    for entry in table:
+        kind = {1: "short", 2: "long"}.get(int((entry.get("self_test_code") or {}).get("value") or 0))
+        hours = entry.get("power_on_hours")
+        if kind and kind not in info.last_attempt_hours and isinstance(hours, int) and poh is not None:
+            info.last_attempt_hours[kind] = max(poh - hours, 0)
+
     latest_meaningful: dict[str, Any] | None = None
     for entry in table:
         result = (entry.get("self_test_result") or {}).get("value")
@@ -392,12 +417,83 @@ class SmartCollector(Collector):
         translate: Translator,
         runner: CommandRunner = run_command,
         clock: Any = time.monotonic,
+        local_now: Callable[[], datetime] = datetime.now,
     ) -> None:
         super().__init__(translate, runner)
         self.cfg = cfg
         self.clock = clock
+        self.local_now = local_now
         # Reports kept while a self-test runs, so we do not poll the drive meanwhile
         self._held: dict[str, tuple[float, DiskReport]] = {}
+        # Manual requests from the HA buttons: disk key -> "short" | "long"
+        self._manual: dict[str, str] = {}
+        # Last scheduled start attempt per disk (monotonic), to avoid retry loops
+        self._last_auto_start: dict[str, float] = {}
+
+    def on_command(self, key: str) -> bool:
+        for kind in ("short", "long"):
+            suffix = f"_selftest_{kind}"
+            if key.startswith("disk_") and key.endswith(suffix):
+                self._manual[key[: -len(suffix)]] = kind
+                return True
+        return False
+
+    def _due_kind(self, st: SelfTestInfo) -> str | None:
+        sched = self.cfg.selftest
+        attempts = st.last_attempt_hours
+        if sched.long_interval_days > 0:
+            last = attempts.get("long")
+            if last is None or last >= sched.long_interval_days * 24:
+                return "long"
+        if sched.short_interval_hours > 0:
+            # a long test covers the short one
+            last_any = min((h for h in attempts.values()), default=None)
+            if last_any is None or last_any >= sched.short_interval_hours:
+                return "short"
+        return None
+
+    def _maybe_start_selftest(self, device: SmartDevice, report: DiskReport, now: float) -> None:
+        st = report.selftest
+        if not st.supported or st.in_progress:
+            return
+        kind = self._manual.pop(report.key, None)
+        manual = kind is not None
+        if kind is None:
+            sched = self.cfg.selftest
+            if not sched.enabled or not sched.in_window(self.local_now()):
+                return
+            if now - self._last_auto_start.get(report.key, -AUTO_RETRY_DELAY) < AUTO_RETRY_DELAY:
+                return
+            kind = self._due_kind(st)
+            if kind is None:
+                return
+            self._last_auto_start[report.key] = now
+
+        args = ["-t", kind]
+        if device.type:
+            args += ["-d", device.type]
+        res = self.run(self._cmd(*args, device.name), self.cfg.timeout)
+        if res.returncode & (EXIT_CMDLINE | EXIT_OPEN_FAILED | EXIT_COMMAND_FAILED):
+            detail = (res.stderr or res.stdout).strip().splitlines()[-1:] or [f"exit {res.returncode}"]
+            _LOGGER.warning("Cannot start %s self-test on %s: %s", kind, device.name, detail[0])
+            report.extra["selftest_start_error"] = detail[0]
+            return
+        minutes = st.long_minutes if kind == "long" else st.short_minutes
+        _LOGGER.info(
+            "Started %s self-test on %s (%s, ~%d min)",
+            kind,
+            device.name,
+            "manual" if manual else "scheduled",
+            minutes,
+        )
+        st.in_progress = True
+        report.extra["selftest_started"] = {
+            "kind": kind,
+            "manual": manual,
+            "at": self.local_now().isoformat(timespec="seconds"),
+        }
+        # Leave the drive alone until the test should be over
+        self._held[device.name] = (now + minutes * 60 + 120, report)
 
     @property
     def interval(self) -> int:
@@ -460,6 +556,7 @@ class SmartCollector(Collector):
                     self._held[device.name] = (now + wait, report)
                 else:
                     self._held.pop(device.name, None)
+                    self._maybe_start_selftest(device, report, now)
             if report.key in seen:  # same disk reachable through two paths
                 continue
             seen.add(report.key)
@@ -508,4 +605,15 @@ class SmartCollector(Collector):
                 )
             )
             readings.append(Reading(key=f"{key}_selftest_age", state=report.selftest.last_ok_hours))
+            for kind, icon in (("short", "mdi:play-circle-outline"), ("long", "mdi:play-speed")):
+                entities.append(
+                    EntitySpec(
+                        key=f"{key}_selftest_{kind}",
+                        platform="button",
+                        name=self.t(f"disk_selftest_{kind}", label=label),
+                        entity_category="config",
+                        icon=icon,
+                        **common,
+                    )
+                )
         return CollectorResult(entities=entities, readings=readings, issues=list(report.issues))

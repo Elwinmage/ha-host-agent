@@ -75,7 +75,7 @@ One device per host (`host_agent_<node_id>`). Entity ids are stable:
 
 | Entity | Key | Notes |
 |---|---|---|
-| Problem (binary_sensor, problem) | `problem` | ON when any issue exists; attributes `severity`, `issues`, `critical_count`, `warning_count` |
+| Overall status (binary_sensor, problem) | `problem` | ON when any issue exists; attributes `severity`, `issues`, `critical_count`, `warning_count` |
 | Issues (sensor) | `problems` | number of issues |
 | Last update (sensor, timestamp) | `last_update` | diagnostic |
 | Agent version (sensor) | `agent_version` | attribute `protocol_version` |
@@ -83,6 +83,7 @@ One device per host (`host_agent_<node_id>`). Entity ids are stable:
 | Disk (binary_sensor, problem) | `disk_<serial>` | attributes: model, serial, device, power-on hours, self-test info, watched attributes, `severity`, `issues` |
 | Disk temperature | `disk_<serial>_temperature` | unknown when the USB bridge does not report it |
 | Last successful self-test | `disk_<serial>_selftest_age` | power-on hours since; only when the drive supports self-tests |
+| Start short / long self-test (buttons) | `disk_<serial>_selftest_short`, `_long` | config category |
 | Filesystem (binary_sensor, problem) | `fs_<mount>` | attributes: mountpoint, source, fstype, sizes, thresholds |
 | Used space | `fs_<mount>_used_pct` | % (same formula as `df`) |
 | Free space | `fs_<mount>_free` | GiB |
@@ -105,6 +106,18 @@ A known disk, or a `required` mountpoint, that disappears is reported as a
 - smartctl exit status bits are decoded (e.g. bit 2 "some commands failed", typical
   of a USB bridge queried without `-d sat`).
 - While a self-test runs, the drive is not polled (some USB bridges abort it).
+
+### Self-tests
+
+The agent schedules SMART self-tests itself (`smart.selftest`): a long test every
+7 days and a short one every 24 h by default, only inside a local time window
+(02:00–06:00). Due dates come from the drive's own self-test log, so nothing is lost
+on restart and tests run by other tools are taken into account. After starting a
+test, the agent does not query the drive until the expected duration has elapsed.
+Each disk also exposes **Start short/long self-test** buttons.
+
+Disable any `-s` schedule in `/etc/smartd.conf` (or smartd itself) to avoid
+two schedulers fighting over the drive.
 
 ## MQTT contract (protocol 1)
 

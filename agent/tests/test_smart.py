@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import datetime
 
 from conftest import load_fixture
 
 from host_agent.collectors.base import CommandResult
 from host_agent.collectors.smart import SmartCollector, parse_smart
-from host_agent.config import SmartConfig
+from host_agent.config import SelfTestSchedule, SmartConfig
 
 
 def codes(report):
@@ -183,26 +184,46 @@ def test_open_failure(smart_cfg, t_en):
 # --------------------------------------------------------------------------- #
 
 
+def NOON():  # outside the default self-test window
+    return datetime(2026, 11, 9, 12, 0)
+
+
+def NIGHT():
+    return datetime(2026, 11, 9, 3, 0)
+
+
 class FakeSmartctl:
-    def __init__(self, outputs):
+    def __init__(self, outputs, start_rc=0):
         self.outputs = outputs
+        self.start_rc = start_rc
         self.calls = []
+
+    def starts(self):
+        return [c for c in self.calls if "-t" in c]
 
     def __call__(self, args, timeout):
         self.calls.append(list(args))
         if "--scan-open" in args:
             return CommandResult(0, json.dumps(load_fixture("scan_open_bkup.json")), "")
+        if "-t" in args:
+            return CommandResult(self.start_rc, "Testing has begun.", "")
         data = self.outputs[args[-1]]
         return CommandResult(data["smartctl"]["exit_status"], json.dumps(data), "")
 
 
 def test_collector_uses_scan_type(smart_cfg, t_en):
     fake = FakeSmartctl({"/dev/sda": load_fixture("ata_crucial_sat.json")})
-    collector = SmartCollector(smart_cfg, t_en, runner=fake)
+    collector = SmartCollector(smart_cfg, t_en, runner=fake, local_now=NOON)
     result = collector.collect()
     assert fake.calls[1] == ["/usr/sbin/smartctl", "--json=c", "-a", "-d", "sat", "/dev/sda"]
     keys = {e.key for e in result.entities}
-    assert keys == {"disk_ata0000000001", "disk_ata0000000001_temperature", "disk_ata0000000001_selftest_age"}
+    assert keys == {
+        "disk_ata0000000001",
+        "disk_ata0000000001_temperature",
+        "disk_ata0000000001_selftest_age",
+        "disk_ata0000000001_selftest_short",
+        "disk_ata0000000001_selftest_long",
+    }
     problem = next(r for r in result.readings if r.key == "disk_ata0000000001")
     assert problem.state == "ON"
     assert problem.attrs["severity"] == "warning"
@@ -214,7 +235,7 @@ def test_collector_holds_during_selftest(smart_cfg, t_en):
     data["ata_smart_data"]["self_test"]["status"]["value"] = 0xF9  # in progress, 90 % left
     fake = FakeSmartctl({"/dev/sda": data})
     clock = [1000.0]
-    collector = SmartCollector(smart_cfg, t_en, runner=fake, clock=lambda: clock[0])
+    collector = SmartCollector(smart_cfg, t_en, runner=fake, clock=lambda: clock[0], local_now=NOON)
     collector.collect()
     collector.collect()  # within the hold window: no new query on the drive
     assert sum(1 for c in fake.calls if c[-1] == "/dev/sda") == 1
@@ -226,4 +247,84 @@ def test_collector_holds_during_selftest(smart_cfg, t_en):
 def test_collector_excludes_by_serial(t_en):
     cfg = SmartConfig(exclude=["ATA0000000001"])
     fake = FakeSmartctl({"/dev/sda": load_fixture("ata_crucial_sat.json")})
-    assert SmartCollector(cfg, t_en, runner=fake).collect().entities == []
+    assert SmartCollector(cfg, t_en, runner=fake, local_now=NOON).collect().entities == []
+
+
+# --------------------------------------------------------------------------- #
+# Self-tests started by the agent
+# --------------------------------------------------------------------------- #
+
+
+def test_last_attempt_per_kind(smart_cfg, t_en):
+    report = parse_smart(load_fixture("ata_crucial_sat.json"), "/dev/sda", smart_cfg, t_en)
+    # latest short at 17481 h, latest extended at 17456 h, power-on 17487 h
+    assert report.selftest.last_attempt_hours == {"short": 6, "long": 31}
+    assert report.selftest.short_minutes == 2
+    assert report.selftest.long_minutes == 10
+
+
+def test_no_start_outside_window(smart_cfg, t_en):
+    cfg = SmartConfig(selftest=SelfTestSchedule(short_interval_hours=1))
+    fake = FakeSmartctl({"/dev/sda": load_fixture("ata_crucial_sat.json")})
+    SmartCollector(cfg, t_en, runner=fake, local_now=NOON).collect()
+    assert fake.starts() == []
+
+
+def test_scheduled_short_test(t_en):
+    # short tried 6 h ago, long 31 h ago: with these intervals only the short one is due
+    cfg = SmartConfig(selftest=SelfTestSchedule(short_interval_hours=4, long_interval_days=7))
+    fake = FakeSmartctl({"/dev/sda": load_fixture("ata_crucial_sat.json")})
+    clock = [0.0]
+    collector = SmartCollector(cfg, t_en, runner=fake, clock=lambda: clock[0], local_now=NIGHT)
+    result = collector.collect()
+    assert fake.starts() == [["/usr/sbin/smartctl", "-t", "short", "-d", "sat", "/dev/sda"]]
+    problem = next(r for r in result.readings if r.key == "disk_ata0000000001")
+    assert problem.attrs["selftest_in_progress"] is True
+    assert problem.attrs["selftest_started"]["kind"] == "short"
+    # drive left alone while the test runs (2 min + margin)
+    clock[0] += 60
+    collector.collect()
+    assert len([c for c in fake.calls if c[-1] == "/dev/sda"]) == 2
+    # no new automatic start within the retry delay
+    clock[0] += 3600
+    collector.collect()
+    assert len(fake.starts()) == 1
+
+
+def test_scheduled_long_test_has_priority(t_en):
+    cfg = SmartConfig(selftest=SelfTestSchedule(short_interval_hours=4, long_interval_days=1))
+    fake = FakeSmartctl({"/dev/sda": load_fixture("ata_crucial_sat.json")})
+    SmartCollector(cfg, t_en, runner=fake, local_now=NIGHT).collect()
+    assert fake.starts()[0][2] == "long"
+
+
+def test_nothing_due(smart_cfg, t_en):
+    fake = FakeSmartctl({"/dev/sda": load_fixture("ata_crucial_sat.json")})
+    SmartCollector(smart_cfg, t_en, runner=fake, local_now=NIGHT).collect()  # 24 h / 7 d defaults
+    assert fake.starts() == []
+
+
+def test_manual_button(smart_cfg, t_en):
+    fake = FakeSmartctl({"/dev/sda": load_fixture("ata_crucial_sat.json")})
+    collector = SmartCollector(smart_cfg, t_en, runner=fake, local_now=NOON)
+    assert collector.on_command("disk_ata0000000001_selftest_long")
+    assert not collector.on_command("refresh")
+    collector.collect()
+    assert fake.starts() == [["/usr/sbin/smartctl", "-t", "long", "-d", "sat", "/dev/sda"]]
+
+
+def test_start_failure_reported(t_en):
+    cfg = SmartConfig(selftest=SelfTestSchedule(short_interval_hours=1))
+    fake = FakeSmartctl({"/dev/sda": load_fixture("ata_crucial_sat.json")}, start_rc=4)
+    result = SmartCollector(cfg, t_en, runner=fake, local_now=NIGHT).collect()
+    problem = next(r for r in result.readings if r.key == "disk_ata0000000001")
+    assert problem.attrs["selftest_in_progress"] is False
+    assert "selftest_start_error" in problem.attrs
+
+
+def test_window_parsing():
+    sched = SelfTestSchedule(window="22:30-05:00")
+    assert sched.in_window(datetime(2026, 1, 1, 23, 0))
+    assert sched.in_window(datetime(2026, 1, 1, 4, 59))
+    assert not sched.in_window(datetime(2026, 1, 1, 12, 0))
+    assert SelfTestSchedule(window="").in_window(datetime(2026, 1, 1, 12, 0))

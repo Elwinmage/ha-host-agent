@@ -54,6 +54,14 @@ collectors:
       warning: 90
       critical: 100
     ignore_error_log: false
+    # Self-tests started by the agent: it then leaves the drive alone until the
+    # test is over. Disable smartd's "-s" schedule to avoid concurrent tests.
+    # Each disk also gets "Start short/long self-test" buttons in Home Assistant.
+    selftest:
+      enabled: true
+      short_interval_hours: 24   # 0 = never
+      long_interval_days: 7      # 0 = never; a long test also counts as a short one
+      window: "02:00-06:00"      # local time, may cross midnight; "" = any time
 
   filesystem:
     enabled: true

@@ -13,7 +13,7 @@ Monitoring of Linux hosts (backup servers first) in Home Assistant:
 
 | Step | Content | State |
 |---|---|---|
-| 1 | Agent: SMART, filesystems, device discovery, LWT, refresh, legacy cleanup; alert blueprint | ✅ 0.1.1 |
+| 1 | Agent: SMART (+ scheduled self-tests), filesystems, device discovery, LWT, refresh, legacy cleanup; alert blueprint | ✅ 0.1.2 |
 | 2 | Agent: dirvish vaults, rsync jobs, push hooks | ⏳ |
 | 3 | Integration: config flow, SSH bootstrap, deployment, update entity, repairs | ⏳ |
 | 4 | Integration: options flow (jobs, thresholds) | ⏳ |
