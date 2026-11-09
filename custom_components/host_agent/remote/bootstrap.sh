@@ -41,7 +41,11 @@ chmod 0600 "${ADMIN_HOME}/.ssh/authorized_keys"
 install -d -m 0755 /usr/local/lib/host-agent
 install -m 0755 -o root -g root "${DIR}/host-agent-admin" /usr/local/lib/host-agent/host-agent-admin
 
-visudo -cqf "${DIR}/sudoers"
+# Portable check (sudo and sudo-rs): show visudo's diagnostic on failure
+if ! check_output="$(visudo -c -f "${DIR}/sudoers" 2>&1)"; then
+    echo "ERROR: sudoers rule rejected by visudo: ${check_output}" >&2
+    exit 65
+fi
 install -m 0440 -o root -g root "${DIR}/sudoers" /etc/sudoers.d/host-agent-admin
 
 install -m 0644 -o root -g root "${DIR}/host-agent.service" /etc/systemd/system/host-agent.service

@@ -1,5 +1,6 @@
 # Installed by the Home Assistant host_agent integration.
 # The admin account can only run the validating helper, nothing else.
-Defaults:host-agent-admin !requiretty
-Defaults:host-agent-admin env_reset
-host-agent-admin ALL=(root) NOPASSWD: /usr/local/lib/host-agent/host-agent-admin, /usr/local/lib/host-agent/host-agent-admin *
+# Kept to the subset understood by both sudo and sudo-rs (Ubuntu >= 25.10):
+# no Defaults (env_reset is the default), no argument wildcards (a command
+# without arguments already accepts any argument; the helper validates them).
+host-agent-admin ALL=(root) NOPASSWD: /usr/local/lib/host-agent/host-agent-admin
