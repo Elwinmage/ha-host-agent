@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+agent/dist/
+dist/
+
+# Generated at release time by CI (never committed)
+custom_components/host_agent/agent/
+custom_components/host_agent/frontend/
+card/node_modules/
+card/dist/

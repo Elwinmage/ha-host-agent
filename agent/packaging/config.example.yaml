@@ -1,0 +1,74 @@
+# ha-host-agent configuration (/etc/host-agent/config.yaml)
+# Every option is optional except mqtt.host; defaults are shown.
+
+# Identifier used in topics and entity ids (binary_sensor.<node_id>_problem).
+# Default: short hostname.
+node_id: bkup
+# Device name shown in Home Assistant. Default: hostname.
+name: Serveur de sauvegarde
+# Language of entity names and issue messages: en | fr
+language: fr
+log_level: INFO
+state_file: /var/lib/host-agent/state.json
+
+mqtt:
+  host: 192.168.0.109
+  port: 1883
+  username: host-agent-bkup
+  # Secret resolution order: $HOST_AGENT_MQTT_PASSWORD, password_file, password
+  password_file: /etc/host-agent/mqtt.secret
+  # password: changeme
+  tls: false
+  # ca_certs: /etc/ssl/certs/ca-certificates.crt
+  discovery_prefix: homeassistant
+  base_topic: host_agent
+
+collectors:
+  smart:
+    enabled: true
+    # Seconds between SMART reads. Kept long on purpose: polling too often can
+    # abort self-tests on some USB bridges.
+    interval: 3600
+    smartctl: /usr/sbin/smartctl
+    # Use "sudo -n smartctl" (only if the service does not get capabilities)
+    sudo: false
+    # Empty list: auto-detect with "smartctl --scan-open"
+    devices: []
+    #  - name: /dev/sda
+    #    type: sat
+    # Device paths or serial numbers to ignore
+    exclude: []
+    temperature:        # ATA/SCSI; NVMe uses the limits reported by the drive
+      warning: 55
+      critical: 65
+    # Warn when no self-test succeeded for this many power-on hours (0 = disabled)
+    selftest_max_age_hours: 168
+    # ATA attribute id -> maximum raw value before a warning
+    ata_attribute_thresholds:
+      5: 0      # Reallocated sectors / NAND blocks
+      187: 0    # Reported uncorrectable
+      197: 0    # Current pending sectors
+      198: 0    # Offline uncorrectable
+      # 199: 10 # UDMA CRC errors (cable / USB bridge)
+    nvme_wear:          # percentage_used
+      warning: 90
+      critical: 100
+    ignore_error_log: false
+
+  filesystem:
+    enabled: true
+    interval: 300
+    # Restrict to these mountpoints (empty = every device-backed filesystem)
+    include_mounts: []
+    # Glob patterns of mountpoints to skip
+    exclude_mounts: ["/proc/*", "/sys/*", "/dev/*", "/run/*", "/snap/*", "/var/lib/docker/*"]
+    # Mountpoints that must always be mounted: critical issue when missing
+    required:
+      - /bkup
+    thresholds:         # used %
+      warning: 85
+      critical: 95
+    overrides:
+      /bkup:
+        warning: 90
+        critical: 97

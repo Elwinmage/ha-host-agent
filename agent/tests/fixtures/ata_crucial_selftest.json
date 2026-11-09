@@ -1,0 +1,300 @@
+{
+ "json_format_version": [
+  1,
+  0
+ ],
+ "smartctl": {
+  "version": [
+   7,
+   3
+  ],
+  "svn_revision": "5338",
+  "platform_info": "armv7l-linux-6.1.21-v7+",
+  "build_info": "(local build)",
+  "argv": [
+   "smartctl",
+   "--json",
+   "-l",
+   "selftest",
+   "-d",
+   "sat",
+   "/dev/sda"
+  ],
+  "drive_database_version": {
+   "string": "7.3/5319"
+  },
+  "exit_status": 0
+ },
+ "local_time": {
+  "time_t": 1794204730,
+  "asctime": "Mon Nov  9 07:12:10 2026 CET"
+ },
+ "device": {
+  "name": "/dev/sda",
+  "info_name": "/dev/sda [SAT]",
+  "type": "sat",
+  "protocol": "ATA"
+ },
+ "ata_smart_self_test_log": {
+  "standard": {
+   "revision": 1,
+   "table": [
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17481
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17457
+    },
+    {
+     "type": {
+      "value": 2,
+      "string": "Extended offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17456
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17433
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17409
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17385
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17361
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17337
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17313
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17289
+    },
+    {
+     "type": {
+      "value": 2,
+      "string": "Extended offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17269
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17265
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17241
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17217
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17193
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17169
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 0,
+      "string": "Completed without error",
+      "passed": true
+     },
+     "lifetime_hours": 17145
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17125
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17120
+    },
+    {
+     "type": {
+      "value": 2,
+      "string": "Extended offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17100
+    },
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 25,
+      "string": "Aborted by host",
+      "remaining_percent": 90
+     },
+     "lifetime_hours": 17096
+    }
+   ],
+   "count": 21,
+   "error_count_total": 0,
+   "error_count_outdated": 0
+  }
+ }
+}

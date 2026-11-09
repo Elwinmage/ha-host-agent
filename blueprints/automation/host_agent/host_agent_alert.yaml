@@ -1,0 +1,258 @@
+blueprint:
+  name: Host Agent - problem alerts
+  description: >
+    Notifies when a host monitored by **ha-host-agent** reports a problem
+    (failing or missing disk, overdue self-test, full or unmounted filesystem...),
+    when a new issue appears while a problem is already active, when everything
+    is back to normal and when the agent stops reporting.
+
+
+    Select the host **Problem** sensors (`binary_sensor.<host>_problem`) to get
+    one alert per host, or individual disk / filesystem sensors for finer control.
+
+
+    Variables available in the actions: `title`, `message`, `severity`
+    (`warning` / `critical`), `event` (`problem`, `new_issue`, `resolved`,
+    `offline`, `online`), `host`, `entity_id`, `issues` (list).
+  domain: automation
+  author: Elwinmage
+  source_url: https://github.com/Elwinmage/ha-host-agent/blob/main/blueprints/automation/host_agent/host_agent_alert.yaml
+  homeassistant:
+    min_version: 2025.10.0
+  input:
+    sensors:
+      name: Sensors
+      icon: mdi:server
+      input:
+        problem_entities:
+          name: Problem sensors
+          description: Host, disk or filesystem problem sensors created by ha-host-agent.
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain: binary_sensor
+                  device_class: problem
+                  integration: mqtt
+        min_severity:
+          name: Minimum severity
+          default: warning
+          selector:
+            select:
+              options:
+                - label: Warnings and critical issues
+                  value: warning
+                - label: Critical issues only
+                  value: critical
+        delay:
+          name: Confirmation delay
+          description: The problem must last this long before the first alert.
+          default:
+            minutes: 5
+          selector:
+            duration: {}
+    behaviour:
+      name: Behaviour
+      icon: mdi:tune
+      input:
+        notify_new_issues:
+          name: Alert on new issues
+          description: Alert again when another issue appears while a problem is already active.
+          default: true
+          selector:
+            boolean: {}
+        notify_resolved:
+          name: Alert when resolved
+          default: true
+          selector:
+            boolean: {}
+        notify_offline:
+          name: Alert when the agent is offline
+          description: The sensors become unavailable when the agent stops (LWT).
+          default: true
+          selector:
+            boolean: {}
+        offline_delay:
+          name: Offline delay
+          default:
+            minutes: 30
+          selector:
+            duration: {}
+        language:
+          name: Message language
+          default: fr
+          selector:
+            select:
+              options:
+                - label: Français
+                  value: fr
+                - label: English
+                  value: en
+    notification:
+      name: Notification
+      icon: mdi:bell-ring
+      input:
+        persistent_notification:
+          name: Persistent notification
+          description: Keep a notification in Home Assistant while the problem lasts (dismissed when resolved).
+          default: true
+          selector:
+            boolean: {}
+        alert_actions:
+          name: Alert actions
+          description: >
+            Actions run for each alert, e.g. `notify.mobile_app_xxx` with
+            title `{{ title }}` and message `{{ message }}`.
+          default: []
+          selector:
+            action: {}
+
+mode: queued
+max: 20
+max_exceeded: silent
+
+triggers:
+  - trigger: state
+    entity_id: !input problem_entities
+    to: "on"
+    not_from:
+      - unavailable
+      - unknown
+    for: !input delay
+    id: problem
+  - trigger: state
+    entity_id: !input problem_entities
+    attribute: issues
+    id: new_issue
+  - trigger: state
+    entity_id: !input problem_entities
+    from: "on"
+    to: "off"
+    id: resolved
+  - trigger: state
+    entity_id: !input problem_entities
+    to: unavailable
+    for: !input offline_delay
+    id: offline
+  - trigger: state
+    entity_id: !input problem_entities
+    from: unavailable
+    not_to:
+      - unknown
+    id: online
+
+variables:
+  lang: !input language
+  min_severity: !input min_severity
+  notify_new: !input notify_new_issues
+  notify_resolved: !input notify_resolved
+  notify_offline: !input notify_offline
+  persistent: !input persistent_notification
+  delay_input: !input delay
+  offline_input: !input offline_delay
+  event: "{{ trigger.id }}"
+  entity_id: "{{ trigger.entity_id }}"
+  entity_name: "{{ state_attr(trigger.entity_id, 'friendly_name') or trigger.entity_id }}"
+  host: >-
+    {%- set dev = device_id(trigger.entity_id) -%}
+    {{- (device_attr(dev, 'name_by_user') or device_attr(dev, 'name')) if dev else entity_name -}}
+  delay_s: >-
+    {%- set d = delay_input -%}
+    {{- (d.days | default(0)) * 86400 + (d.hours | default(0)) * 3600
+        + (d.minutes | default(0)) * 60 + (d.seconds | default(0)) -}}
+  offline_s: >-
+    {%- set d = offline_input -%}
+    {{- (d.days | default(0)) * 86400 + (d.hours | default(0)) * 3600
+        + (d.minutes | default(0)) * 60 + (d.seconds | default(0)) -}}
+  allowed: "{{ ['critical'] if min_severity == 'critical' else ['warning', 'critical'] }}"
+  from_state: "{{ trigger.from_state.state if trigger.from_state else 'unknown' }}"
+  to_state: "{{ trigger.to_state.state if trigger.to_state else 'unknown' }}"
+  # Issues filtered by severity, before and after the change
+  issues: >-
+    {%- set all = trigger.to_state.attributes.get('issues', []) if trigger.to_state else [] -%}
+    {{- all | selectattr('severity', 'in', allowed) | list -}}
+  old_issues: >-
+    {%- set all = trigger.from_state.attributes.get('issues', []) if trigger.from_state else [] -%}
+    {{- all | selectattr('severity', 'in', allowed) | list -}}
+  new_issues: >-
+    {%- set old_ids = old_issues | map(attribute='id') | list -%}
+    {{- issues | rejectattr('id', 'in', old_ids) | list -}}
+  severity: >-
+    {%- set src = old_issues if event == 'resolved' else issues -%}
+    {{- 'critical' if src | selectattr('severity', 'eq', 'critical') | list | count > 0 else 'warning' -}}
+  elapsed_s: >-
+    {{- (trigger.to_state.last_changed - trigger.from_state.last_changed).total_seconds() | int
+        if trigger.from_state and trigger.to_state else 0 -}}
+  should_notify: >-
+    {%- if event == 'problem' -%}{{ issues | count > 0 }}
+    {%- elif event == 'new_issue' -%}
+      {{- notify_new and from_state == 'on' and to_state == 'on' and new_issues | count > 0 -}}
+    {%- elif event == 'resolved' -%}
+      {{- notify_resolved and old_issues | count > 0 and elapsed_s | int >= delay_s | int -}}
+    {%- elif event == 'offline' -%}{{ notify_offline }}
+    {%- elif event == 'online' -%}{{ notify_offline and elapsed_s | int >= offline_s | int }}
+    {%- else -%}false{%- endif -%}
+  texts:
+    fr:
+      problem: Anomalie
+      new_issue: Nouvelle anomalie
+      resolved: Retour à la normale
+      offline: Agent hors ligne
+      online: Agent de nouveau en ligne
+      resolved_msg: Plus aucune anomalie.
+      offline_msg: "Aucune donnée reçue depuis {} min."
+      online_msg: "L'agent publie à nouveau après {} min d'absence."
+    en:
+      problem: Problem
+      new_issue: New issue
+      resolved: Back to normal
+      offline: Agent offline
+      online: Agent back online
+      resolved_msg: No more issues.
+      offline_msg: "No data received for {} min."
+      online_msg: "The agent is reporting again after {} min."
+  title: >-
+    {%- set alert = '🔴' if severity == 'critical' else '🟠' -%}
+    {%- set icon = {'problem': alert, 'new_issue': alert, 'resolved': '🟢',
+                    'offline': '⚫', 'online': '🟢'}[event] -%}
+    {{- icon }} {{ host }} : {{ texts[lang][event] -}}
+  message: >-
+    {%- if event in ['problem', 'new_issue'] -%}
+      {%- for i in (new_issues if event == 'new_issue' else issues) -%}
+        • {{ i.subject_name or entity_name }} : {{ i.message }}{{ '\n' if not loop.last }}
+      {%- endfor -%}
+    {%- elif event == 'resolved' -%}{{ texts[lang].resolved_msg }}
+    {%- elif event == 'offline' -%}{{ texts[lang].offline_msg.replace('{}', (offline_s | int // 60) | string) }}
+    {%- else -%}{{ texts[lang].online_msg.replace('{}', (elapsed_s | int // 60) | string) }}
+    {%- endif -%}
+  persistent_message: >-
+    {%- if issues | count > 0 -%}
+      {%- for i in issues -%}
+        • {{ i.subject_name or entity_name }} : {{ i.message }}{{ '\n' if not loop.last }}
+      {%- endfor -%}
+    {%- else -%}{{ message }}{%- endif -%}
+  notification_id: "host_agent_{{ trigger.entity_id | replace('.', '_') }}"
+
+conditions:
+  - condition: template
+    value_template: "{{ should_notify | bool }}"
+
+actions:
+  - if:
+      - condition: template
+        value_template: "{{ persistent | bool }}"
+    then:
+      - if:
+          - condition: template
+            value_template: "{{ event == 'resolved' or (event == 'online' and issues | count == 0) }}"
+        then:
+          - action: persistent_notification.dismiss
+            data:
+              notification_id: "{{ notification_id }}"
+        else:
+          - action: persistent_notification.create
+            data:
+              notification_id: "{{ notification_id }}"
+              title: "{{ title }}"
+              message: "{{ persistent_message }}"
+  - sequence: !input alert_actions

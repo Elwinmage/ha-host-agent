@@ -1,0 +1,42 @@
+[Unit]
+Description=ha-host-agent - host monitoring for Home Assistant (MQTT)
+Documentation=https://github.com/Elwinmage/ha-host-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=host-agent
+Group=host-agent
+ExecStart=/usr/bin/python3 /opt/host-agent/current/host-agent.pyz --config /etc/host-agent/config.yaml run
+Restart=always
+RestartSec=30
+TimeoutStopSec=20
+
+# smartctl needs raw I/O (ATA/SAT pass-through), admin (NVMe) and read access
+# to block/char devices; nothing else. The agent never writes outside its state dir.
+AmbientCapabilities=CAP_SYS_RAWIO CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_SYS_RAWIO CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+NoNewPrivileges=yes
+
+StateDirectory=host-agent
+StateDirectoryMode=0750
+ConfigurationDirectory=host-agent
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

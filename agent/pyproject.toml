@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ha-host-agent"
+dynamic = ["version"]
+description = "Host monitoring agent (SMART, filesystems, backups) for Home Assistant over MQTT"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # Pure Python dependencies only: the agent ships as a single .pyz (armv7, arm64, x86_64)
+    "paho-mqtt>=2.0,<3",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10", "types-PyYAML"]
+
+[project.scripts]
+host-agent = "host_agent.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "host_agent.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "BLE", "SIM", "RUF"]
+ignore = ["RUF001", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S108", "E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict_optional = true
+warn_unused_ignores = true
+ignore_missing_imports = true

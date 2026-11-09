@@ -1,0 +1,70 @@
+{
+ "json_format_version": [
+  1,
+  0
+ ],
+ "smartctl": {
+  "version": [
+   7,
+   3
+  ],
+  "svn_revision": "5338",
+  "platform_info": "armv7l-linux-6.1.21-v7+",
+  "build_info": "(local build)",
+  "argv": [
+   "smartctl",
+   "--json",
+   "-a",
+   "/dev/sda1"
+  ],
+  "exit_status": 4
+ },
+ "local_time": {
+  "time_t": 1794204170,
+  "asctime": "Mon Nov  9 07:02:50 2026 CET"
+ },
+ "device": {
+  "name": "/dev/sda1",
+  "info_name": "/dev/sda1",
+  "type": "scsi",
+  "protocol": "SCSI"
+ },
+ "scsi_vendor": "CT480BX5",
+ "scsi_product": "00SSD1",
+ "scsi_model_name": "CT480BX5 00SSD1",
+ "scsi_revision": "0",
+ "scsi_version": "SPC-4",
+ "user_capacity": {
+  "blocks": 937703088,
+  "bytes": 480103981056
+ },
+ "logical_block_size": 512,
+ "rotation_rate": 0,
+ "form_factor": {
+  "scsi_value": 3,
+  "name": "2.5 inches"
+ },
+ "logical_unit_id": "0x5000000000000001",
+ "serial_number": "SCSI00000001",
+ "device_type": {
+  "scsi_terminology": "Peripheral Device Type [PDT]",
+  "scsi_value": 0,
+  "name": "disk"
+ },
+ "smart_support": {
+  "available": true,
+  "enabled": true
+ },
+ "temperature_warning": {
+  "enabled": false
+ },
+ "smart_status": {
+  "passed": true
+ },
+ "temperature": {
+  "current": 0
+ },
+ "scsi_temperature": {
+  "drive_trip": 0
+ }
+}
