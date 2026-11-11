@@ -239,6 +239,36 @@ def cmd_remove(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def _send_command(cfg: Config, name: str, payload: str) -> bool:
+    client = _client(cfg, with_will=False)
+    if not _connect(client, cfg):
+        return False
+    client.publish(_topics(cfg).command(name), payload, retain=False)
+    client.flush()
+    client.stop()
+    return True
+
+
+def cmd_notify(cfg: Config, args: argparse.Namespace) -> int:
+    """Ask the running agent to collect now (dirvish post-server hook, end of a job...)."""
+    return 0 if _send_command(cfg, "collect", args.collector) else 1
+
+
+def cmd_report(cfg: Config, args: argparse.Namespace) -> int:
+    """Record the result of a job declared with `report: true`, then notify the agent."""
+    from datetime import datetime
+
+    from host_agent.collectors.jobs import write_report
+
+    if not any(job.name == args.name and job.report for job in cfg.jobs.items):
+        print(f"Unknown job '{args.name}' (declare it in collectors.jobs with report: true)", file=sys.stderr)
+        return 2
+    write_report(cfg.reports_dir, args.name, not args.failed, args.message, datetime.now().astimezone())
+    # The report is on disk: a broker outage only delays its publication
+    _send_command(cfg, "collect", "jobs")
+    return 0
+
+
 def cmd_validate(cfg: Config, _args: argparse.Namespace) -> int:
     """Configuration already parsed by main(): only report success (used before deployment)."""
     print(f"Configuration OK (node_id={cfg.node_id})")
@@ -279,6 +309,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--apply", action="store_true")
     p = sub.add_parser("remove", help="delete this device from Home Assistant")
     p.add_argument("--yes", action="store_true")
+    p = sub.add_parser("notify", help="ask the running agent to collect now (for hooks)")
+    p.add_argument("collector", choices=["dirvish", "jobs", "smart", "filesystem", "system"])
+    p = sub.add_parser("report", help="record the result of a job declared with report: true")
+    p.add_argument("name", help="job name")
+    p.add_argument("--failed", action="store_true", help="the run failed")
+    p.add_argument("--message", help="short message shown in Home Assistant")
     sub.add_parser("validate", help="validate the configuration file and exit")
     sub.add_parser("version")
     return parser
@@ -292,6 +328,8 @@ COMMANDS = {
     "cleanup-legacy": cmd_cleanup_legacy,
     "remove": cmd_remove,
     "validate": cmd_validate,
+    "notify": cmd_notify,
+    "report": cmd_report,
 }
 
 

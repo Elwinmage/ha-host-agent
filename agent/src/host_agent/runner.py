@@ -58,6 +58,13 @@ def _local(iso: str) -> str:
         return iso
 
 
+_KIND_PREFIXES = {"disk_": "disk", "fs_": "filesystem", "vault_": "vault", "job_": "job"}
+
+
+def _kind_of(key: str) -> str | None:
+    return next((kind for prefix, kind in _KIND_PREFIXES.items() if key.startswith(prefix)), None)
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC).replace(microsecond=0)
 
@@ -126,6 +133,12 @@ class Runner:
                     self._force_collect = True
             elif name == "forget":
                 self.forget(payload.strip())
+            elif name == "collect":
+                # Pushed by hooks (`host-agent notify`): run one collector now
+                target = payload.strip()
+                if any(c.name == target for c in self.collectors):
+                    _LOGGER.info("Collection of %s requested", target)
+                    self._next_run[target] = 0
             elif self._dispatch_button(name):
                 self._force_collect = True
             else:
@@ -212,7 +225,14 @@ class Runner:
                     merged.issues.append(issue)
                     merged.readings.append(
                         problem_reading(
-                            key, [issue], {"missing": True, "last_seen": since, "label": spec.subject_label}
+                            key,
+                            [issue],
+                            {
+                                "kind": _kind_of(key),
+                                "missing": True,
+                                "last_seen": since,
+                                "label": spec.subject_label,
+                            },
                         )
                     )
                 else:
@@ -229,9 +249,7 @@ class Runner:
 
     def _still_wanted(self, key: str, spec: EntitySpec) -> bool:
         # State files written by 0.1.0 have no source: infer it from the key
-        source = spec.source or (
-            "smart" if key.startswith("disk_") else "filesystem" if key.startswith("fs_") else None
-        )
+        source = spec.source or {"disk": "smart", "filesystem": "filesystem"}.get(_kind_of(key) or "")
         owner = next((c for c in self.collectors if c.name == source), None)
         if owner is None:
             return source is None  # collector disabled: release its subjects
@@ -283,6 +301,8 @@ class Runner:
                 HOST_PROBLEM,
                 "ON" if issues else "OFF",
                 {
+                    "kind": "host",
+                    "node_id": self.topics.node_id,
                     "severity": severity,
                     "critical_count": sum(1 for i in issues if i.severity == CRITICAL),
                     "warning_count": sum(1 for i in issues if i.severity == WARNING),

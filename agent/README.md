@@ -63,6 +63,8 @@ host-agent [-c CONFIG] run                 # daemon (systemd)
 host-agent once [--dry-run]                # collect once; --dry-run prints discovery + states
 host-agent check [--no-mqtt]               # config, smartctl, devices, required mounts, broker
 host-agent forget <subject>                # forget a disk/filesystem removed on purpose
+host-agent notify <collector>              # collect now (hooks): dirvish, jobs, smart...
+host-agent report <job> [--failed] [--message M]   # result of a job declared with report: true
 host-agent cleanup-legacy [--scope ...] [--apply]   # delete entities of the former bash scripts
 host-agent remove --yes                    # delete the device from Home Assistant
 host-agent version
@@ -86,7 +88,16 @@ One device per host (`host_agent_<node_id>`). Entity ids are stable:
 | Start short / long self-test (buttons) | `disk_<serial>_selftest_short`, `_long` | config category |
 | Filesystem (binary_sensor, problem) | `fs_<mount>` | attributes: mountpoint, source, fstype, sizes, thresholds |
 | Used space | `fs_<mount>_used_pct` | % (same formula as `df`) |
-| Free space | `fs_<mount>_free` | GiB |
+| Free space | `fs_<mount>_free` | GiB (MiB below 10 GiB) |
+| Backup (binary_sensor, problem) | `vault_<vault>` | dirvish vault; attributes: last image, status, duration, `last_success`, `running`, `history` (one entry per day) |
+| Last successful backup | `vault_<vault>_last_success` | timestamp |
+| Job (binary_sensor, problem) | `job_<name>` | attributes: last run, status, message, file |
+| Last successful run | `job_<name>_last_success` | timestamp |
+| System (binary_sensor, problem) | `system` | attributes: reboot required, OS, kernel, model |
+| CPU temperature, load, memory used, last boot | `system_cpu_temperature`, `system_load`, `system_memory`, `system_boot` | |
+
+Every problem entity carries a `kind` attribute (`host`, `disk`, `filesystem`, `vault`,
+`job`, `system`), used by the card.
 
 Each issue is `{id, subject, code, severity, message}`; `severity` is `warning` or
 `critical`. Disks are keyed by serial number, so `sda` becoming `sdb` changes nothing.
@@ -132,18 +143,57 @@ two schedulers fighting over the drive.
 Discovery is republished when Home Assistant announces itself on
 `homeassistant/status`.
 
+### Backups and jobs
+
+**dirvish**: the vaults of the banks listed in `/etc/dirvish/master.conf` (or
+`collectors.dirvish.banks`) are found automatically. For each vault the agent reads the
+`summary` of its images: last status (`success`, `warning (24)` counted as success by
+default, other warnings, errors), age of the last successful image (critical above
+`max_age_hours`, 26 h by default), image still running, per-day history. Unlike the former
+script, a backup that has not run *yet today* is not an error.
+
+For an immediate update after each run, add to `master.conf`:
+
+```
+post-server: /usr/local/bin/host-agent notify dirvish
+```
+
+**Jobs**: anything else that must run regularly.
+
+```yaml
+collectors:
+  jobs:
+    items:
+      - name: rsync eric                     # newest file = last run
+        path: /bkup/dirvish/rsync/eric/eric_*.log
+        success_pattern: "total size is"     # optional: must appear at the end of the file
+        max_age_hours: 48
+      - name: offsite copy                   # pushed by the job itself
+        report: true
+```
+
+A `report` job calls, when it ends:
+
+```bash
+host-agent report "offsite copy"                          # success
+host-agent report "offsite copy" --failed --message "disk full"
+```
+
+The result is kept in `/var/lib/host-agent/reports/` (so a broker outage only delays it)
+and the agent publishes it immediately.
+
 ## Migration from the bash scripts
 
 1. Install and start the agent (step above), check the new device in HA.
 2. Stop the old daemon and cron jobs:
    `systemctl disable --now home-assistant.service` and remove the
    `check-hd-mqtt.sh` / `mqtt_update.sh` cron entries.
-   Keep `dirvish-chk-mqtt.sh` and `rsync-chk-mqtt.sh` until the backup collectors
-   are released.
+   Since 0.3.0 `dirvish-chk-mqtt.sh`, `dirvish-chk.sh` (e-mail) and `rsync-chk-mqtt.sh`
+   are replaced too (dirvish collector, `rsync` jobs, alert blueprint).
 3. Delete the old entities (dry run first):
    ```bash
-   host-agent cleanup-legacy --scope smart,space,update
-   host-agent cleanup-legacy --scope smart,space,update --apply
+   host-agent cleanup-legacy --scope smart,space,update,vaults,rsync
+   host-agent cleanup-legacy --scope smart,space,update,vaults,rsync --apply
    ```
 4. Update the dashboard (`binary_sensor.bkup_health_dev_sda` →
    `binary_sensor.bkup_disk_<serial>`; **the logic is inverted**: ON now means

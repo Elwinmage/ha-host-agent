@@ -40,6 +40,11 @@ jobs:
             echo "::error::tag v${{ inputs.version }} already exists"; exit 1
           fi
       - run: pip install -e './agent[dev]' pytest-homeassistant-custom-component asyncssh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Card typecheck
+        run: npm ci --prefix card && npm --prefix card run lint
       - name: Agent tests
         working-directory: agent
         run: pytest -q
@@ -74,6 +79,7 @@ jobs:
               json.dump(manifest, fh, indent=2)
               fh.write("\n")
           EOF
+          sed -i -E "0,/\"version\": \"[^\"]+\"/s//\"version\": \"${VERSION}\"/" card/package.json
           git diff --stat
 
       - name: Commit and tag
@@ -88,8 +94,21 @@ jobs:
           git tag -a "v${VERSION}" -m "v${VERSION}"
           git push origin "HEAD:${GITHUB_REF_NAME}" "v${VERSION}"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: card/package-lock.json
+
       - name: Bundle the agent in the integration
         run: scripts/bundle_agent.sh
+
+      - name: Build the card served by the integration
+        working-directory: card
+        run: |
+          npm ci
+          npm run build
+          grep -q "${{ inputs.version }}" ../custom_components/host_agent/frontend/host-agent-card.js
 
       - name: Check the archive
         env:

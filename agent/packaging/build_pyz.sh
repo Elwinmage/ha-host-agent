@@ -14,7 +14,7 @@ PYTHON="${PYTHON:-python3}"
 # to its pure Python implementation, which keeps the archive portable (armv7/arm64/x86_64).
 "${PYTHON}" -m pip install --quiet --no-compile --target "${BUILD_DIR}" "paho-mqtt>=2.0,<3" "PyYAML>=6.0"
 find "${BUILD_DIR}" \( -name '*.so' -o -name '*.pyd' -o -name '__pycache__' \) -prune -exec rm -rf {} +
-rm -rf "${BUILD_DIR}"/bin "${BUILD_DIR}"/_yaml
+rm -rf "${BUILD_DIR:?}/bin" "${BUILD_DIR:?}/_yaml"
 
 cp -r "${AGENT_DIR}/src/host_agent" "${BUILD_DIR}/"
 find "${BUILD_DIR}/host_agent" -name '__pycache__' -prune -exec rm -rf {} +

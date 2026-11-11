@@ -18,7 +18,7 @@ from .const import (
     DEFAULT_DISCOVERY_PREFIX,
 )
 
-ALLOWED_COLLECTORS = {"smart", "filesystem"}
+ALLOWED_COLLECTORS = {"smart", "filesystem", "dirvish", "jobs", "system"}
 HEADER = (
     "# Managed by the Home Assistant host_agent integration: local changes are overwritten.\n"
     "# Edit the integration options instead.\n"

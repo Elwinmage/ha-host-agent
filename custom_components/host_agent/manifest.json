@@ -1,6 +1,10 @@
 {
   "domain": "host_agent",
   "name": "Host Agent",
+  "after_dependencies": [
+    "frontend",
+    "http"
+  ],
   "codeowners": [
     "@Elwinmage"
   ],
@@ -16,5 +20,5 @@
   "requirements": [
     "asyncssh>=2.14.0"
   ],
-  "version": "0.2.0"
+  "version": "0.3.0"
 }

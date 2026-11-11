@@ -53,7 +53,12 @@ class AgentUpdate(HostAgentEntity, UpdateEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         agent = self.runtime.agent
-        return {"agent_online": agent.online, "protocol_version": agent.protocol}
+        return {
+            "agent_online": agent.online,
+            "protocol_version": agent.protocol,
+            # used by the card to find the agent entities of this device
+            "node_id": self.runtime.node_id,
+        }
 
     async def async_release_notes(self) -> str | None:
         return (

@@ -81,3 +81,39 @@ collectors:
     #  /bkup/dirvish:
     #    warning: 90
     #    critical: 97
+
+  # dirvish vaults (enabled when a bank is found; banks read from master.conf)
+  dirvish:
+    enabled: true
+    interval: 900
+    master_conf: /etc/dirvish/master.conf
+    banks: []           # e.g. [/bkup/dirvish/vaults]; empty = bank: entries of master.conf
+    exclude: []         # vault names to ignore, e.g. [mp3, videos, mythtv]
+    max_age_hours: 26   # critical when the last successful image is older
+    history_days: 14    # days kept in the timeline attribute (card)
+    vanished_is_ok: true  # "warning (24) -- file vanished" counts as success
+    # Immediate update after each backup, in master.conf:
+    #   post-server: /usr/local/bin/host-agent notify dirvish
+
+  # Freshness of other jobs (rsync pushes, scripts...)
+  jobs:
+    interval: 300
+    items: []
+    #  - name: rsync eric
+    #    path: /bkup/dirvish/rsync/eric/eric_*.log   # newest file = last run
+    #    success_pattern: "total size is"            # optional regex in the file
+    #    max_age_hours: 48
+    #  - name: offsite copy
+    #    report: true    # end of the job: host-agent report "offsite copy" [--failed --message "..."]
+    #    max_age_hours: 26
+
+  # CPU temperature, load, memory, boot time, pending reboot
+  system:
+    enabled: true
+    interval: 60
+    cpu_temperature:
+      warning: 75
+      critical: 85
+    memory:             # used %
+      warning: 90
+      critical: 97

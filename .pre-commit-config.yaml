@@ -1,0 +1,51 @@
+# pre-commit install  # then hooks run on every commit; CI runs them on every push
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-merge-conflict
+      - id: check-json
+      - id: check-toml
+      - id: check-yaml
+        # blueprints use the !input tag
+        args: [--unsafe]
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: check-added-large-files
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.9
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        args: [-S, warning]
+        files: ^(custom_components/host_agent/remote/(host-agent-admin|bootstrap\.sh)|agent/packaging/.*\.sh|scripts/.*\.sh)$
+        types: [file]
+
+  - repo: local
+    hooks:
+      - id: card-typecheck
+        name: card typecheck (tsc)
+        entry: npm --prefix card run lint
+        language: system
+        files: ^card/src/.*\.ts$
+        pass_filenames: false
+      - id: versions-aligned
+        name: agent and integration versions aligned
+        language: system
+        entry: >-
+          sh -c 'a=$(sed -nE "s/^__version__ = \"([^\"]+)\"/\1/p" agent/src/host_agent/__init__.py);
+          m=$(python3 -c "import json; print(json.load(open(\"custom_components/host_agent/manifest.json\"))[\"version\"])");
+          [ "$a" = "$m" ] || { echo "agent $a != manifest $m"; exit 1; }'
+        files: ^(agent/src/host_agent/__init__\.py|custom_components/host_agent/manifest\.json)$
+        pass_filenames: false

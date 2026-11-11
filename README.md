@@ -2,22 +2,24 @@
 
 Monitoring of Linux hosts (backup servers first) in Home Assistant:
 
-- **agent** (`agent/`): Python agent on each host, publishing SMART health,
-  filesystem usage and (soon) backup status over MQTT;
+- **agent** (`agent/`): Python agent on each host, publishing over MQTT the SMART health
+  of the disks, filesystem usage, dirvish backups, job freshness (rsync, scripts...) and
+  system health;
 - **blueprint** (`blueprints/`): alert automation for any problem reported by the agents;
 - **integration** (`custom_components/host_agent/`): adds a host from its IP and SSH
   credentials, installs, configures and updates the agent (with automatic rollback);
-- **card** (`card/`, upcoming): dedicated Lovelace card, served by the integration.
+- **card** (`card/`): dedicated Lovelace card, served by the integration (nothing to
+  declare in the dashboard resources).
 
 ## Status
 
 | Step | Content | State |
 |---|---|---|
 | 1 | Agent: SMART (+ scheduled self-tests), filesystems, device discovery, LWT, refresh, legacy cleanup; alert blueprint | ✅ 0.1.2 |
-| 2 | Agent: dirvish vaults, rsync jobs, push hooks | ⏳ |
+| 2 | Agent: dirvish vaults, jobs (files or pushed reports), system, push hooks | ✅ 0.3.0 |
 | 3 | Integration: config flow, SSH bootstrap, deployment, update entity, repairs | ✅ 0.2.0 |
-| 4 | Integration: options flow (jobs, thresholds) | 🟡 YAML editor in 0.2.0, guided forms to come |
-| 5 | Card | ⏳ |
+| 4 | Integration: options flow (one form per collector, jobs editor, YAML) | ✅ 0.3.0 |
+| 5 | Card served by the integration | ✅ 0.3.0 |
 
 ## Integration
 
@@ -74,15 +76,65 @@ option is enabled). An update:
 
 ### Options
 
-Automatic updates, language and the `collectors` section of the agent configuration (YAML
-editor, same syntax as [`config.example.yaml`](agent/packaging/config.example.yaml)). Changes
-are validated by the agent on the host before being saved.
+**Settings → Devices & services → Host Agent → Configure** opens a menu:
+
+| Menu | Settings |
+|---|---|
+| General | language, automatic agent updates |
+| Disks | SMART reading interval, temperature thresholds, self-test schedule (short / long / time window), ignored disks |
+| Filesystems | mountpoints that must be mounted, mountpoints to watch, used space thresholds |
+| dirvish backups | banks (default: `master.conf`), ignored vaults, maximum age, timeline length, rsync 24 handling |
+| Jobs | add / edit / delete jobs: newest file matching a glob (+ optional success regex), or a report pushed with `host-agent report` |
+| System | CPU temperature and memory thresholds |
+| Advanced | the whole `collectors` section in YAML ([`config.example.yaml`](agent/packaging/config.example.yaml) syntax) |
+
+Every change is sent to the host and validated by the agent itself before being saved; a
+refused configuration is never applied and the form shows the agent's message.
+
+## Card
+
+Served by the integration and loaded automatically: add a card, pick **Host Agent** and
+the host. YAML:
+
+```yaml
+type: custom:host-agent-card
+device_id: 0123abcd...      # the host device (visual editor)
+# node_id: bkup             # instead of device_id, for an agent installed by hand
+title: Serveur de sauvegarde  # default: device name
+days: 14                    # backup timeline length
+show: [issues, system, disks, filesystems, vaults, jobs]   # default: all
+```
+
+- header: overall status, agent version, last update, pending agent update, refresh button;
+- current issues with their message;
+- system chips (CPU temperature, load, memory, uptime, pending reboot);
+- disks (model, size, power-on hours, last self-test, temperature);
+- filesystems with usage bar and thresholds;
+- dirvish vaults with last success and a per-day timeline (success / warning / failure /
+  running);
+- jobs with last success.
+
+Every row opens the corresponding entity. Colours follow the theme (`--success-color`,
+`--warning-color`, `--error-color`). Development: `cd card && npm ci && npm run build`
+writes `custom_components/host_agent/frontend/host-agent-card.js` (git-ignored, built by
+the release workflow).
 
 ### Removal
 
 Deleting the integration entry stops and removes the agent, its configuration and Home
 Assistant's access (sudoers rule and key), and deletes the MQTT device. The two accounts are
 left in place (`userdel host-agent host-agent-admin` to remove them).
+
+## Development
+
+```bash
+pip install pre-commit && pre-commit install   # ruff, shellcheck, tsc, JSON/YAML checks...
+scripts/bundle_agent.sh                        # embed the agent in the integration
+(cd card && npm ci && npm run build)           # build the card served by the integration
+pytest agent/tests tests/integration           # + sudo pytest tests/remote (helper, needs root)
+```
+
+CI: `pre-commit`, `Validate with hassfest`, `Validate with HACS`, `Agent`, `Integration`.
 
 ## Releasing
 

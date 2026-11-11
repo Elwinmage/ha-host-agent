@@ -100,6 +100,7 @@ class DiskReport:
 
     def attributes(self) -> dict[str, Any]:
         attrs: dict[str, Any] = {
+            "kind": "disk",
             "device": self.device,
             "device_type": self.dev_type,
             "protocol": self.protocol,

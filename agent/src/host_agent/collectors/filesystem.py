@@ -177,6 +177,7 @@ class FilesystemCollector(Collector):
                 )
             )
         attrs = {
+            "kind": "filesystem",
             "mountpoint": mount.mountpoint,
             "source": mount.source,
             "fstype": mount.fstype,
@@ -202,7 +203,7 @@ class FilesystemCollector(Collector):
         return CollectorResult(
             entities=entities,
             readings=[
-                problem_reading(key, issues, {"mountpoint": mp}),
+                problem_reading(key, issues, {"kind": "filesystem", "mountpoint": mp, "mounted": False}),
                 Reading(f"{key}_used_pct", None),
                 Reading(f"{key}_free", None),
             ],

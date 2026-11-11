@@ -78,22 +78,124 @@
   "options": {
     "step": {
       "init": {
-        "title": "Options de l'agent",
-        "description": "Les changements de langue ou de collecteurs sont validés puis appliqués immédiatement sur l'hôte. {detail}",
+        "title": "Options de Host Agent",
+        "menu_options": {
+          "general": "Général (langue, mises à jour automatiques)",
+          "smart": "Disques (SMART, auto-tests)",
+          "filesystem": "Systèmes de fichiers",
+          "dirvish": "Sauvegardes dirvish",
+          "jobs": "Tâches (rsync, scripts…)",
+          "system": "Système (CPU, mémoire)",
+          "advanced": "Avancé (YAML)"
+        }
+      },
+      "general": {
+        "title": "Général",
+        "description": "{detail}",
         "data": {
           "auto_update": "Mettre à jour l'agent automatiquement",
-          "language": "Langue",
-          "collectors": "Collecteurs (YAML)"
+          "language": "Langue des entités et des messages"
+        }
+      },
+      "smart": {
+        "title": "Disques",
+        "description": "Les changements sont validés par l'agent sur l'hôte avant d'être enregistrés. {detail}",
+        "data": {
+          "enabled": "Surveiller les disques (SMART)",
+          "interval_minutes": "Intervalle de lecture",
+          "temperature_warning": "Température : avertissement",
+          "temperature_critical": "Température : critique",
+          "selftest_enabled": "Lancer les auto-tests",
+          "selftest_short_hours": "Auto-test court toutes les (0 = jamais)",
+          "selftest_long_days": "Auto-test long tous les (0 = jamais)",
+          "selftest_window": "Plage horaire des auto-tests",
+          "selftest_max_age_hours": "Alerter sans auto-test réussi depuis (0 = jamais)",
+          "exclude": "Disques ignorés (périphérique ou numéro de série)"
         },
         "data_description": {
-          "collectors": "Sections `smart` et `filesystem`, même syntaxe que le fichier de configuration de l'agent. Vide : valeurs par défaut."
+          "selftest_window": "Heure locale, HH:MM-HH:MM (peut passer minuit), vide = à toute heure.",
+          "interval_minutes": "Gardez-le long sur un pont USB : des lectures fréquentes peuvent interrompre les auto-tests."
+        }
+      },
+      "filesystem": {
+        "title": "Systèmes de fichiers",
+        "description": "{detail}",
+        "data": {
+          "enabled": "Surveiller les systèmes de fichiers",
+          "required": "Points de montage obligatoires",
+          "include_mounts": "Uniquement ces points de montage (vide = tous)",
+          "warning": "Espace utilisé : avertissement",
+          "critical": "Espace utilisé : critique"
+        },
+        "data_description": {
+          "required": "Un point de montage absent est une anomalie critique, ex. /bkup/dirvish."
+        }
+      },
+      "dirvish": {
+        "title": "Sauvegardes dirvish",
+        "description": "{detail}",
+        "data": {
+          "enabled": "Surveiller les vaults dirvish",
+          "banks": "Banks (vide = celles de master.conf)",
+          "exclude": "Vaults ignorés",
+          "max_age_hours": "Âge maximal de la dernière sauvegarde réussie",
+          "history_days": "Jours affichés dans la frise",
+          "vanished_is_ok": "Compter les avertissements « file vanished » (rsync 24) comme un succès"
+        }
+      },
+      "jobs": {
+        "title": "Tâches",
+        "menu_options": {
+          "job_add": "Ajouter une tâche",
+          "job_select": "Modifier une tâche",
+          "job_delete": "Supprimer des tâches"
+        }
+      },
+      "job_select": {
+        "title": "Modifier une tâche",
+        "data": {
+          "job": "Tâche"
+        }
+      },
+      "job_edit": {
+        "title": "Tâche",
+        "description": "**Fichier** : le fichier le plus récent correspondant au motif représente la dernière exécution (ex. un log). **Rapport** : la tâche appelle `host-agent report \"<nom>\" [--failed]` à la fin. {detail}",
+        "data": {
+          "name": "Nom",
+          "source": "Source",
+          "path": "Fichiers (motif glob)",
+          "success_pattern": "Motif de succès (regex, facultatif)",
+          "max_age_hours": "Âge maximal de la dernière exécution réussie"
+        },
+        "data_description": {
+          "path": "ex. /bkup/dirvish/rsync/eric/eric_*.log",
+          "success_pattern": "Cherché à la fin du fichier, ex. total size is"
+        }
+      },
+      "job_delete": {
+        "title": "Supprimer des tâches",
+        "description": "{detail}",
+        "data": {
+          "jobs": "Tâches à supprimer"
+        }
+      },
+      "advanced": {
+        "title": "Avancé",
+        "description": "Section `collectors` de la configuration de l'agent (même syntaxe que config.example.yaml). {detail}",
+        "data": {
+          "collectors": "Collecteurs (YAML)"
         }
       }
     },
     "error": {
       "invalid_collectors": "Section des collecteurs invalide.",
       "configure_failed": "L'agent a refusé la configuration.",
-      "not_loaded": "L'intégration n'est pas chargée."
+      "not_loaded": "L'intégration n'est pas chargée.",
+      "warning_above_critical": "Le seuil d'avertissement ne doit pas dépasser le seuil critique.",
+      "invalid_window": "Format attendu : HH:MM-HH:MM.",
+      "duplicate_job": "Une tâche porte déjà ce nom.",
+      "required": "Obligatoire.",
+      "invalid_regex": "Expression régulière invalide."
     }
   },
   "entity": {
@@ -116,6 +218,14 @@
     "protocol_mismatch": {
       "title": "Agent incompatible sur {host}",
       "description": "L'agent utilise le protocole {agent}, cette intégration attend le {integration}. Installez la mise à jour de l'agent depuis la page de l'appareil."
+    }
+  },
+  "selector": {
+    "job_source": {
+      "options": {
+        "path": "Fichier",
+        "report": "Rapport (host-agent report)"
+      }
     }
   }
 }

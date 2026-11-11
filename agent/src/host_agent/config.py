@@ -160,6 +160,54 @@ class FilesystemConfig:
 
 
 @dataclass
+class DirvishConfig:
+    """dirvish vaults: last image status and age (enabled when banks are found)."""
+
+    enabled: bool = True
+    interval: int = 900
+    master_conf: str = "/etc/dirvish/master.conf"
+    # Empty: banks listed in master.conf
+    banks: list[str] = field(default_factory=list)
+    exclude: list[str] = field(default_factory=list)
+    max_age_hours: int = 26
+    history_days: int = 14
+    # rsync exit 24 ("some files vanished before they could be transferred") is normal on live systems
+    vanished_is_ok: bool = True
+
+
+@dataclass
+class JobSpec:
+    name: str
+    # Newest file matching this glob = last run (e.g. a log written by the job)
+    path: str | None = None
+    # Regex that must appear in the file for the run to count as successful
+    success_pattern: str | None = None
+    # Status pushed with `host-agent report <name>` instead of a file
+    report: bool = False
+    max_age_hours: int = 26
+
+    @property
+    def key(self) -> str:
+        return f"job_{slugify(self.name)}"
+
+
+@dataclass
+class JobsConfig:
+    """Freshness of arbitrary jobs (rsync pushes, cron scripts, off-site copies...)."""
+
+    interval: int = 300
+    items: list[JobSpec] = field(default_factory=list)
+
+
+@dataclass
+class SystemConfig:
+    enabled: bool = True
+    interval: int = 60
+    cpu_temperature: Thresholds = field(default_factory=lambda: Thresholds(75, 85))
+    memory: Thresholds = field(default_factory=lambda: Thresholds(90, 97))
+
+
+@dataclass
 class Config:
     node_id: str
     name: str
@@ -169,6 +217,13 @@ class Config:
     mqtt: MqttConfig = field(default_factory=MqttConfig)
     smart: SmartConfig = field(default_factory=SmartConfig)
     filesystem: FilesystemConfig = field(default_factory=FilesystemConfig)
+    dirvish: DirvishConfig = field(default_factory=DirvishConfig)
+    jobs: JobsConfig = field(default_factory=JobsConfig)
+    system: SystemConfig = field(default_factory=SystemConfig)
+
+    @property
+    def reports_dir(self) -> Path:
+        return Path(self.state_file).parent / "reports"
 
 
 # --------------------------------------------------------------------------- #
@@ -342,6 +397,86 @@ def _parse_filesystem(data: Any) -> FilesystemConfig:
     )
 
 
+def _interval(section: dict[str, Any], default: int, minimum: int, path: str) -> int:
+    value = _typed(section, "interval", int, default, path)
+    if value < minimum:
+        raise ConfigError(f"'{path}.interval' must be at least {minimum} seconds")
+    return int(value)
+
+
+def _positive(section: dict[str, Any], key: str, default: int, path: str) -> int:
+    value = _typed(section, key, int, default, path)
+    if value < 1:
+        raise ConfigError(f"'{path}.{key}' must be at least 1")
+    return int(value)
+
+
+def _parse_dirvish(data: Any) -> DirvishConfig:
+    path = "collectors.dirvish"
+    section = _section(data, path)
+    _check_keys(section, set(DirvishConfig.__dataclass_fields__), path)
+    d = DirvishConfig()
+    return DirvishConfig(
+        enabled=_typed(section, "enabled", bool, d.enabled, path),
+        interval=_interval(section, d.interval, 60, path),
+        master_conf=_typed(section, "master_conf", str, d.master_conf, path),
+        banks=_str_list(section, "banks", [], path),
+        exclude=_str_list(section, "exclude", [], path),
+        max_age_hours=_positive(section, "max_age_hours", d.max_age_hours, path),
+        history_days=_positive(section, "history_days", d.history_days, path),
+        vanished_is_ok=_typed(section, "vanished_is_ok", bool, d.vanished_is_ok, path),
+    )
+
+
+def _parse_jobs(data: Any) -> JobsConfig:
+    path = "collectors.jobs"
+    section = _section(data, path)
+    _check_keys(section, {"interval", "items"}, path)
+    items: list[JobSpec] = []
+    seen: set[str] = set()
+    for idx, raw in enumerate(_typed(section, "items", list, [], path)):
+        item_path = f"{path}.items[{idx}]"
+        item = _section(raw, item_path)
+        _check_keys(item, {"name", "path", "success_pattern", "report", "max_age_hours"}, item_path)
+        name = _typed(item, "name", str, None, item_path)
+        if not name:
+            raise ConfigError(f"'{item_path}.name' is required")
+        spec = JobSpec(
+            name=name,
+            path=_typed(item, "path", str, None, item_path),
+            success_pattern=_typed(item, "success_pattern", str, None, item_path),
+            report=_typed(item, "report", bool, False, item_path),
+            max_age_hours=_positive(item, "max_age_hours", 26, item_path),
+        )
+        if bool(spec.path) == spec.report:
+            raise ConfigError(f"'{item_path}': set either 'path' or 'report: true'")
+        if spec.success_pattern:
+            try:
+                re.compile(spec.success_pattern)
+            except re.error as err:
+                raise ConfigError(f"'{item_path}.success_pattern': {err}") from err
+        if spec.key in seen:
+            raise ConfigError(f"'{item_path}': duplicate job name '{name}'")
+        seen.add(spec.key)
+        items.append(spec)
+    return JobsConfig(interval=_interval(section, JobsConfig.interval, 30, path), items=items)
+
+
+def _parse_system(data: Any) -> SystemConfig:
+    path = "collectors.system"
+    section = _section(data, path)
+    _check_keys(section, set(SystemConfig.__dataclass_fields__), path)
+    d = SystemConfig()
+    return SystemConfig(
+        enabled=_typed(section, "enabled", bool, d.enabled, path),
+        interval=_interval(section, d.interval, 10, path),
+        cpu_temperature=_thresholds(
+            section.get("cpu_temperature"), d.cpu_temperature, f"{path}.cpu_temperature"
+        ),
+        memory=_thresholds(section.get("memory"), d.memory, f"{path}.memory"),
+    )
+
+
 def parse_config(data: Any) -> Config:
     root = _section(data, "<root>")
     _check_keys(
@@ -355,7 +490,7 @@ def parse_config(data: Any) -> Config:
         raise ConfigError(f"'language' must be one of: {', '.join(SUPPORTED_LANGUAGES)}")
 
     collectors = _section(root.get("collectors"), "collectors")
-    _check_keys(collectors, {"smart", "filesystem"}, "collectors")
+    _check_keys(collectors, {"smart", "filesystem", "dirvish", "jobs", "system"}, "collectors")
 
     return Config(
         node_id=node_id,
@@ -366,6 +501,9 @@ def parse_config(data: Any) -> Config:
         mqtt=_parse_mqtt(root.get("mqtt")),
         smart=_parse_smart(collectors.get("smart")),
         filesystem=_parse_filesystem(collectors.get("filesystem")),
+        dirvish=_parse_dirvish(collectors.get("dirvish")),
+        jobs=_parse_jobs(collectors.get("jobs")),
+        system=_parse_system(collectors.get("system")),
     )
 
 

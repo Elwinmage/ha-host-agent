@@ -2,9 +2,9 @@ name: Integration
 
 on:
   push:
-    paths: ["custom_components/**", "tests/**", "agent/**", ".github/workflows/integration.yml"]
+    paths: ["custom_components/**", "tests/**", "agent/**", "card/**", ".github/workflows/integration.yml"]
   pull_request:
-    paths: ["custom_components/**", "tests/**", "agent/**", ".github/workflows/integration.yml"]
+    paths: ["custom_components/**", "tests/**", "agent/**", "card/**", ".github/workflows/integration.yml"]
 
 jobs:
   lint:
@@ -35,6 +35,22 @@ jobs:
       - run: pip install pytest-homeassistant-custom-component asyncssh mypy
       - run: python -m mypy custom_components/host_agent --ignore-missing-imports --follow-imports=silent
       - run: python -m pytest tests/integration -q
+
+  card:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: card
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: card/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
 
   helper:
     runs-on: ubuntu-latest

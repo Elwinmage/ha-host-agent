@@ -78,22 +78,124 @@
   "options": {
     "step": {
       "init": {
-        "title": "Agent options",
-        "description": "Changes to the language or collectors are validated and applied on the host right away. {detail}",
+        "title": "Host Agent options",
+        "menu_options": {
+          "general": "General (language, automatic updates)",
+          "smart": "Disks (SMART, self-tests)",
+          "filesystem": "Filesystems",
+          "dirvish": "dirvish backups",
+          "jobs": "Jobs (rsync, scripts...)",
+          "system": "System (CPU, memory)",
+          "advanced": "Advanced (YAML)"
+        }
+      },
+      "general": {
+        "title": "General",
+        "description": "{detail}",
         "data": {
           "auto_update": "Update the agent automatically",
-          "language": "Language",
-          "collectors": "Collectors (YAML)"
+          "language": "Language of entity names and messages"
+        }
+      },
+      "smart": {
+        "title": "Disks",
+        "description": "Changes are validated by the agent on the host before being saved. {detail}",
+        "data": {
+          "enabled": "Monitor disks (SMART)",
+          "interval_minutes": "Reading interval",
+          "temperature_warning": "Temperature warning",
+          "temperature_critical": "Temperature critical",
+          "selftest_enabled": "Run self-tests",
+          "selftest_short_hours": "Short self-test every (0 = never)",
+          "selftest_long_days": "Long self-test every (0 = never)",
+          "selftest_window": "Self-test time window",
+          "selftest_max_age_hours": "Warn when no successful self-test for (0 = never)",
+          "exclude": "Ignored disks (device or serial number)"
         },
         "data_description": {
-          "collectors": "`smart` and `filesystem` sections, same syntax as the agent configuration file. Empty: defaults."
+          "selftest_window": "Local time, HH:MM-HH:MM (may cross midnight), empty = any time.",
+          "interval_minutes": "Keep it long on USB bridges: frequent reads can abort self-tests."
+        }
+      },
+      "filesystem": {
+        "title": "Filesystems",
+        "description": "{detail}",
+        "data": {
+          "enabled": "Monitor filesystems",
+          "required": "Mountpoints that must be mounted",
+          "include_mounts": "Only these mountpoints (empty = all)",
+          "warning": "Used space warning",
+          "critical": "Used space critical"
+        },
+        "data_description": {
+          "required": "A missing mountpoint is a critical issue, e.g. /bkup/dirvish."
+        }
+      },
+      "dirvish": {
+        "title": "dirvish backups",
+        "description": "{detail}",
+        "data": {
+          "enabled": "Monitor dirvish vaults",
+          "banks": "Banks (empty = from master.conf)",
+          "exclude": "Ignored vaults",
+          "max_age_hours": "Maximum age of the last successful backup",
+          "history_days": "Days shown in the timeline",
+          "vanished_is_ok": "Count \"file vanished\" warnings (rsync 24) as success"
+        }
+      },
+      "jobs": {
+        "title": "Jobs",
+        "menu_options": {
+          "job_add": "Add a job",
+          "job_select": "Edit a job",
+          "job_delete": "Delete jobs"
+        }
+      },
+      "job_select": {
+        "title": "Edit a job",
+        "data": {
+          "job": "Job"
+        }
+      },
+      "job_edit": {
+        "title": "Job",
+        "description": "**File**: the newest file matching the pattern is the last run (e.g. a log). **Report**: the job calls `host-agent report \"<name>\" [--failed]` when it ends. {detail}",
+        "data": {
+          "name": "Name",
+          "source": "Source",
+          "path": "Files (glob pattern)",
+          "success_pattern": "Success pattern (regex, optional)",
+          "max_age_hours": "Maximum age of the last successful run"
+        },
+        "data_description": {
+          "path": "e.g. /bkup/dirvish/rsync/eric/eric_*.log",
+          "success_pattern": "Searched at the end of the file, e.g. total size is"
+        }
+      },
+      "job_delete": {
+        "title": "Delete jobs",
+        "description": "{detail}",
+        "data": {
+          "jobs": "Jobs to delete"
+        }
+      },
+      "advanced": {
+        "title": "Advanced",
+        "description": "`collectors` section of the agent configuration (same syntax as config.example.yaml). {detail}",
+        "data": {
+          "collectors": "Collectors (YAML)"
         }
       }
     },
     "error": {
       "invalid_collectors": "Invalid collectors section.",
       "configure_failed": "The agent refused the configuration.",
-      "not_loaded": "The integration is not loaded."
+      "not_loaded": "The integration is not loaded.",
+      "warning_above_critical": "The warning threshold must not exceed the critical one.",
+      "invalid_window": "Expected HH:MM-HH:MM.",
+      "duplicate_job": "A job with this name already exists.",
+      "required": "Required.",
+      "invalid_regex": "Invalid regular expression."
     }
   },
   "entity": {
@@ -116,6 +218,14 @@
     "protocol_mismatch": {
       "title": "Agent on {host} is incompatible",
       "description": "The agent uses protocol {agent}, this integration expects {integration}. Install the agent update from the device page."
+    }
+  },
+  "selector": {
+    "job_source": {
+      "options": {
+        "path": "File",
+        "report": "Report (host-agent report)"
+      }
     }
   }
 }

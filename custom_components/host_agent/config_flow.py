@@ -16,7 +16,6 @@ from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlow,
 )
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import HomeAssistant, callback
@@ -25,11 +24,9 @@ from homeassistant.helpers import selector
 
 from . import remote
 from .agent_config import (
-    CollectorsError,
     build_config,
     import_collectors,
     import_language,
-    validate_collectors,
 )
 from .bundle import BundleError, load_bundle, load_remote_files
 from .const import (
@@ -56,6 +53,7 @@ from .const import (
     HEALTH_TIMEOUT,
     LANGUAGES,
 )
+from .options_flow import HostAgentOptionsFlow
 from .ssh import (
     CannotConnect,
     HostKeyMismatch,
@@ -452,54 +450,4 @@ class HostAgentConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_update_reload_and_abort(
             entry,
             data_updates={CONF_PRIVATE_KEY: private_key, CONF_HOST_KEY: self._host_key},
-        )
-
-
-class HostAgentOptionsFlow(OptionsFlow):
-    """Options: auto update, language and collectors configuration (pushed to the agent)."""
-
-    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-        placeholders = {"detail": ""}
-        options = dict(self.config_entry.options)
-        if user_input is not None:
-            try:
-                collectors = validate_collectors(user_input.get(CONF_COLLECTORS))
-            except CollectorsError as err:
-                errors[CONF_COLLECTORS] = "invalid_collectors"
-                placeholders["detail"] = str(err)
-            else:
-                new_options = {
-                    CONF_AUTO_UPDATE: user_input[CONF_AUTO_UPDATE],
-                    CONF_LANGUAGE: user_input[CONF_LANGUAGE],
-                    CONF_COLLECTORS: collectors,
-                }
-                agent_changed = new_options[CONF_LANGUAGE] != options.get(CONF_LANGUAGE) or new_options[
-                    CONF_COLLECTORS
-                ] != (options.get(CONF_COLLECTORS) or {})
-                if agent_changed:
-                    runtime = getattr(self.config_entry, "runtime_data", None)
-                    if runtime is None:
-                        errors["base"] = "not_loaded"
-                    else:
-                        try:
-                            await runtime.async_configure(new_options)
-                        except (HomeAssistantError, remote.RemoteError) as err:
-                            errors["base"] = "configure_failed"
-                            placeholders["detail"] = str(err)
-                if not errors:
-                    return self.async_create_entry(data=new_options)
-            options = {**options, **user_input}
-
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_AUTO_UPDATE, default=options.get(CONF_AUTO_UPDATE, False)): bool,
-                vol.Required(CONF_LANGUAGE, default=options.get(CONF_LANGUAGE, "en")): vol.In(LANGUAGES),
-                vol.Optional(
-                    CONF_COLLECTORS, default=options.get(CONF_COLLECTORS) or {}
-                ): selector.ObjectSelector(),
-            }
-        )
-        return self.async_show_form(
-            step_id="init", data_schema=schema, errors=errors, description_placeholders=placeholders
         )
