@@ -79,7 +79,6 @@ jobs:
               json.dump(manifest, fh, indent=2)
               fh.write("\n")
           EOF
-          sed -i -E "0,/\"version\": \"[^\"]+\"/s//\"version\": \"${VERSION}\"/" card/package.json
           git diff --stat
 
       - name: Commit and tag
