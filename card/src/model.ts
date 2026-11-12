@@ -28,6 +28,11 @@ export interface HostModel {
   refresh?: HassEntity;
   system?: Subject;
   disks: Subject[];
+  gpus: Subject[];
+  pools: Subject[];
+  services?: Subject;
+  updates?: Subject;
+  kernel?: Subject;
   filesystems: Subject[];
   vaults: Subject[];
   jobs: Subject[];
@@ -116,6 +121,11 @@ export function buildModel(hass: HomeAssistant, config: HostAgentCardConfig): Ho
     ),
     vaults: ofKind("vault"),
     jobs: ofKind("job"),
+    gpus: ofKind("gpu"),
+    pools: ofKind("pool"),
+    services: ofKind("services")[0],
+    updates: ofKind("updates")[0],
+    kernel: ofKind("kernel")[0],
   };
 }
 

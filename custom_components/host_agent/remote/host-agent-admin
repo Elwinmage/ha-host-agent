@@ -40,7 +40,12 @@ die() { echo "ERROR: $*" >&2; exit "${2:-1}"; }
 
 mkdir -p "$(dirname "${LOCK}")"
 exec 9>"${LOCK}"
-flock -w 120 9 || die "another operation is running" 75
+# util-linux flock has a timeout option, BusyBox's does not
+if flock --help 2>&1 | grep -q -- "-w"; then
+    flock -w 120 9 || die "another operation is running" 75
+else
+    timeout 120 flock 9 || die "another operation is running" 75
+fi
 
 # Incoming files are written by the unprivileged admin account: refuse links and
 # special files so root never follows a path chosen by that account.
@@ -58,6 +63,15 @@ check_all_incoming() {
 }
 
 group_exists() { getent group host-agent >/dev/null 2>&1; }
+
+# Point "current" to a version: rename of a new link, atomic with GNU and BusyBox alike
+switch_to() {
+    ln -sfn "${PREFIX}/versions/$1" "${PREFIX}/current.new"
+    if ! mv -Tf "${PREFIX}/current.new" "${PREFIX}/current" 2>/dev/null; then
+        rm -f "${PREFIX}/current.new"
+        ln -sfn "${PREFIX}/versions/$1" "${PREFIX}/current"
+    fi
+}
 
 current_version() {
     local target
@@ -83,6 +97,20 @@ restart_and_check() {
 }
 
 journal_tail() { journalctl -u "${SERVICE}" -n 20 --no-pager 2>/dev/null >&2 || true; }
+
+# Read-only access the collectors need: GPUs and Raspberry Pi firmware (video, render),
+# the kernel log (systemd-journal, adm). Only groups that exist on this host.
+ensure_groups() {
+    # never touch the real accounts when testing against a fake root
+    [[ -z "${ROOT}" ]] || return 0
+    id -u host-agent >/dev/null 2>&1 || return 0
+    local group
+    for group in video render systemd-journal adm; do
+        if getent group "${group}" >/dev/null 2>&1 && ! id -nG host-agent | tr ' ' '\n' | grep -qx "${group}"; then
+            usermod -aG "${group}" host-agent || true
+        fi
+    done
+}
 
 write_wrapper() {
     mkdir -p "$(dirname "${WRAPPER}")"
@@ -163,7 +191,7 @@ cmd_install() {
     [[ "${sha}" =~ ^[0-9a-f]{64}$ ]] || die "invalid sha256" 64
     local src="${INCOMING}/host-agent.pyz"
     [[ -f "${src}" ]] || die "missing ${src}" 66
-    echo "${sha}  ${src}" | sha256sum -c --status - || die "checksum mismatch" 65
+    [[ "$(sha256sum "${src}" | awk '{print $1}')" == "${sha}" ]] || die "checksum mismatch" 65
 
     local reported
     reported="$("${PYTHON}" "${src}" version 2>/dev/null | awk '{print $2}')"
@@ -178,10 +206,10 @@ cmd_install() {
     if [[ -n "${previous}" && "${previous}" != "${version}" ]]; then
         echo "${previous}" > "${PREFIX}/previous"
     fi
-    ln -sfn "${PREFIX}/versions/${version}" "${PREFIX}/current.new"
-    mv -Tf "${PREFIX}/current.new" "${PREFIX}/current"
+    switch_to "${version}"
     apply_incoming_config
     write_wrapper
+    ensure_groups
 
     if restart_and_check; then
         drop_config_backup
@@ -194,8 +222,7 @@ cmd_install() {
     journal_tail
     restore_config_backup
     if [[ -n "${previous}" && "${previous}" != "${version}" && -d "${PREFIX}/versions/${previous}" ]]; then
-        ln -sfn "${PREFIX}/versions/${previous}" "${PREFIX}/current.new"
-        mv -Tf "${PREFIX}/current.new" "${PREFIX}/current"
+        switch_to "${previous}"
         restart_and_check || true
         echo "ROLLED_BACK ${previous}"
     fi
@@ -226,8 +253,7 @@ cmd_rollback() {
     previous="$(previous_version)"
     current="$(current_version)"
     [[ -n "${previous}" && -d "${PREFIX}/versions/${previous}" ]] || die "no previous version" 69
-    ln -sfn "${PREFIX}/versions/${previous}" "${PREFIX}/current.new"
-    mv -Tf "${PREFIX}/current.new" "${PREFIX}/current"
+    switch_to "${previous}"
     [[ -n "${current}" ]] && echo "${current}" > "${PREFIX}/previous"
     restart_and_check || { journal_tail; die "service failed after rollback" 3; }
     echo "ROLLED_BACK ${previous}"

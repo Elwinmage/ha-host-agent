@@ -31,7 +31,7 @@ export interface HomeAssistant {
   callService(domain: string, service: string, data?: Record<string, unknown>): Promise<unknown>;
 }
 
-export type Section = "issues" | "system" | "disks" | "filesystems" | "vaults" | "jobs";
+export type Section = "issues" | "system" | "disks" | "filesystems" | "storage" | "gpus" | "vaults" | "jobs";
 
 export interface HostAgentCardConfig {
   type: string;

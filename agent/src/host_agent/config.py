@@ -8,12 +8,24 @@ import socket
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, get_type_hints
 
 import yaml
 
 from host_agent.i18n import SUPPORTED_LANGUAGES
 
+COLLECTOR_NAMES = (
+    "smart",
+    "filesystem",
+    "dirvish",
+    "jobs",
+    "system",
+    "gpu",
+    "services",
+    "storage",
+    "updates",
+    "kernel",
+)
 DEFAULT_CONFIG_PATH = "/etc/host-agent/config.yaml"
 DEFAULT_STATE_FILE = "/var/lib/host-agent/state.json"
 PASSWORD_ENV = "HOST_AGENT_MQTT_PASSWORD"  # noqa: S105 - env var name, not a secret
@@ -154,6 +166,10 @@ class FilesystemConfig:
     required: list[str] = field(default_factory=list)
     thresholds: Thresholds = field(default_factory=lambda: Thresholds(85, 95))
     overrides: dict[str, Thresholds] = field(default_factory=dict)
+    # Used inodes (%): many small files can exhaust them before the space
+    inodes: Thresholds = field(default_factory=lambda: Thresholds(90, 97))
+    # Mountpoints expected read-only (others mounted read-only are a critical issue)
+    readonly_ok: list[str] = field(default_factory=list)
 
     def thresholds_for(self, mount: str) -> Thresholds:
         return self.overrides.get(mount, self.thresholds)
@@ -173,6 +189,14 @@ class DirvishConfig:
     history_days: int = 14
     # rsync exit 24 ("some files vanished before they could be transferred") is normal on live systems
     vanished_is_ok: bool = True
+    # Consistency of the last image vs the previous ones (rsync --stats in the image log)
+    anomaly: bool = True
+    anomaly_history: int = 7
+    size_drop_pct: int = 20
+    files_drop_pct: int = 20
+    changes_factor: float = 5.0
+    changes_min: int = 1000
+    max_log_mb: int = 300
 
 
 @dataclass
@@ -203,8 +227,69 @@ class JobsConfig:
 class SystemConfig:
     enabled: bool = True
     interval: int = 60
-    cpu_temperature: Thresholds = field(default_factory=lambda: Thresholds(75, 85))
+    # 50-90 °C is a normal range for desktop CPUs (Ryzen, Core); Raspberry Pi
+    # throttling is reported separately by the power flags
+    cpu_temperature: Thresholds = field(default_factory=lambda: Thresholds(90, 100))
     memory: Thresholds = field(default_factory=lambda: Thresholds(90, 97))
+    # Raspberry Pi under-voltage / throttling flags
+    power: bool = True
+    # Clock synchronised (systemd-timesyncd, chrony, ntpd through timedated)
+    ntp: bool = True
+
+
+@dataclass
+class GpuConfig:
+    """NVIDIA (nvidia-smi) and AMD (amdgpu sysfs) graphics cards, found automatically."""
+
+    enabled: bool = True
+    interval: int = 60
+    nvidia_smi: str = "nvidia-smi"
+    temperature: Thresholds = field(default_factory=lambda: Thresholds(85, 95))
+    memory: Thresholds = field(default_factory=lambda: Thresholds(98, 100))
+    throttle_is_warning: bool = True
+
+
+@dataclass
+class ServicesConfig:
+    """Failed systemd units, and services that must be running."""
+
+    enabled: bool = True
+    interval: int = 120
+    watch: list[str] = field(default_factory=list)
+    ignore: list[str] = field(default_factory=list)
+
+
+@dataclass
+class StorageConfig:
+    """Linux software RAID (mdadm) and ZFS pools."""
+
+    enabled: bool = True
+    interval: int = 600
+    zpool: str = "zpool"
+    capacity: Thresholds = field(default_factory=lambda: Thresholds(80, 90))
+    scrub_max_age_days: int = 35
+
+
+@dataclass
+class UpdatesConfig:
+    """Pending package updates (apt, dnf)."""
+
+    enabled: bool = True
+    interval: int = 21600
+    security_is_warning: bool = True
+
+
+@dataclass
+class KernelConfig:
+    """Storage / filesystem errors in the kernel log over a sliding window."""
+
+    enabled: bool = True
+    interval: int = 300
+    window_hours: int = 24
+    journalctl: str = "journalctl"
+    # Extra regexes counted as errors
+    patterns: list[str] = field(default_factory=list)
+    ignore: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -220,6 +305,11 @@ class Config:
     dirvish: DirvishConfig = field(default_factory=DirvishConfig)
     jobs: JobsConfig = field(default_factory=JobsConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
+    gpu: GpuConfig = field(default_factory=GpuConfig)
+    services: ServicesConfig = field(default_factory=ServicesConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
+    updates: UpdatesConfig = field(default_factory=UpdatesConfig)
+    kernel: KernelConfig = field(default_factory=KernelConfig)
 
     @property
     def reports_dir(self) -> Path:
@@ -394,6 +484,8 @@ def _parse_filesystem(data: Any) -> FilesystemConfig:
         required=_str_list(section, "required", [], path),
         thresholds=thresholds,
         overrides=overrides,
+        inodes=_thresholds(section.get("inodes"), d.inodes, f"{path}.inodes"),
+        readonly_ok=_str_list(section, "readonly_ok", [], path),
     )
 
 
@@ -425,6 +517,13 @@ def _parse_dirvish(data: Any) -> DirvishConfig:
         max_age_hours=_positive(section, "max_age_hours", d.max_age_hours, path),
         history_days=_positive(section, "history_days", d.history_days, path),
         vanished_is_ok=_typed(section, "vanished_is_ok", bool, d.vanished_is_ok, path),
+        anomaly=_typed(section, "anomaly", bool, d.anomaly, path),
+        anomaly_history=_positive(section, "anomaly_history", d.anomaly_history, path),
+        size_drop_pct=_positive(section, "size_drop_pct", d.size_drop_pct, path),
+        files_drop_pct=_positive(section, "files_drop_pct", d.files_drop_pct, path),
+        changes_factor=float(_typed(section, "changes_factor", (int, float), d.changes_factor, path)),
+        changes_min=_positive(section, "changes_min", d.changes_min, path),
+        max_log_mb=_positive(section, "max_log_mb", d.max_log_mb, path),
     )
 
 
@@ -474,7 +573,45 @@ def _parse_system(data: Any) -> SystemConfig:
             section.get("cpu_temperature"), d.cpu_temperature, f"{path}.cpu_temperature"
         ),
         memory=_thresholds(section.get("memory"), d.memory, f"{path}.memory"),
+        power=_typed(section, "power", bool, d.power, path),
+        ntp=_typed(section, "ntp", bool, d.ntp, path),
     )
+
+
+T = TypeVar("T")
+
+
+def _parse_simple(cls: type[T], data: Any, path: str, min_interval: int) -> T:
+    """Generic parser for flat sections (bool, int, float, str, list[str], Thresholds)."""
+    section = _section(data, path)
+    _check_keys(section, set(cls.__dataclass_fields__), path)  # type: ignore[attr-defined]
+    default = cls()
+    hints = get_type_hints(cls)
+    values: dict[str, Any] = {}
+    for name in cls.__dataclass_fields__:  # type: ignore[attr-defined]
+        current = getattr(default, name)
+        kind = hints[name]
+        if kind is Thresholds:
+            values[name] = _thresholds(section.get(name), current, f"{path}.{name}")
+        elif kind == list[str]:
+            values[name] = _str_list(section, name, current, path)
+        elif kind is float:
+            values[name] = float(_typed(section, name, (int, float), current, path))
+        else:
+            values[name] = _typed(section, name, kind, current, path)
+    if values.get("interval", min_interval) < min_interval:
+        raise ConfigError(f"'{path}.interval' must be at least {min_interval} seconds")
+    for name in ("window_hours", "scrub_max_age_days"):
+        if name in values and values[name] < 1:
+            raise ConfigError(f"'{path}.{name}' must be at least 1")
+    for index, pattern in enumerate(
+        values.get("patterns", []) + values.get("ignore", []) if cls is KernelConfig else []
+    ):
+        try:
+            re.compile(pattern)
+        except re.error as err:
+            raise ConfigError(f"'{path}': invalid regex #{index + 1}: {err}") from err
+    return cls(**values)
 
 
 def parse_config(data: Any) -> Config:
@@ -490,7 +627,7 @@ def parse_config(data: Any) -> Config:
         raise ConfigError(f"'language' must be one of: {', '.join(SUPPORTED_LANGUAGES)}")
 
     collectors = _section(root.get("collectors"), "collectors")
-    _check_keys(collectors, {"smart", "filesystem", "dirvish", "jobs", "system"}, "collectors")
+    _check_keys(collectors, set(COLLECTOR_NAMES), "collectors")
 
     return Config(
         node_id=node_id,
@@ -504,6 +641,11 @@ def parse_config(data: Any) -> Config:
         dirvish=_parse_dirvish(collectors.get("dirvish")),
         jobs=_parse_jobs(collectors.get("jobs")),
         system=_parse_system(collectors.get("system")),
+        gpu=_parse_simple(GpuConfig, collectors.get("gpu"), "collectors.gpu", 10),
+        services=_parse_simple(ServicesConfig, collectors.get("services"), "collectors.services", 30),
+        storage=_parse_simple(StorageConfig, collectors.get("storage"), "collectors.storage", 60),
+        updates=_parse_simple(UpdatesConfig, collectors.get("updates"), "collectors.updates", 600),
+        kernel=_parse_simple(KernelConfig, collectors.get("kernel"), "collectors.kernel", 60),
     )
 
 

@@ -16,7 +16,7 @@ from typing import Any
 from host_agent import PROTOCOL_VERSION, __version__
 from host_agent.collectors import build_collectors
 from host_agent.collectors.base import run_command
-from host_agent.config import DEFAULT_CONFIG_PATH, Config, ConfigError, load_config
+from host_agent.config import COLLECTOR_NAMES, DEFAULT_CONFIG_PATH, Config, ConfigError, load_config
 from host_agent.i18n import Translator
 from host_agent.mqtt.discovery import Topics, detect_device_info, hostname
 from host_agent.runner import Runner
@@ -310,7 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("remove", help="delete this device from Home Assistant")
     p.add_argument("--yes", action="store_true")
     p = sub.add_parser("notify", help="ask the running agent to collect now (for hooks)")
-    p.add_argument("collector", choices=["dirvish", "jobs", "smart", "filesystem", "system"])
+    p.add_argument("collector", choices=list(COLLECTOR_NAMES))
     p = sub.add_parser("report", help="record the result of a job declared with report: true")
     p.add_argument("name", help="job name")
     p.add_argument("--failed", action="store_true", help="the run failed")

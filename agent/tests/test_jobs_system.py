@@ -126,7 +126,7 @@ def fake_root(tmp_path):
 def test_system(fake_root, t_en):
     assert cpu_temperature(str(fake_root)) == 78.3
     assert memory_used_pct(str(fake_root)) == 60.0
-    cfg = SystemConfig(memory=Thresholds(50, 90))
+    cfg = SystemConfig(cpu_temperature=Thresholds(75, 85), memory=Thresholds(50, 90))
     result = SystemCollector(cfg, t_en, root=str(fake_root), now=lambda: NOW).collect()
     r = readings(result)
     assert r["system_cpu_temperature"].state == 78.3
@@ -138,6 +138,27 @@ def test_system(fake_root, t_en):
         ("cpu_temperature_high", "warning"),
         ("memory_high", "warning"),
     }
+
+
+def test_cpu_temperature_prefers_die_sensor(tmp_path):
+    # Ryzen with a Tctl offset: Tdie is the real temperature, CCD sensors are ignored
+    hw = tmp_path / "sys/class/hwmon/hwmon2"
+    hw.mkdir(parents=True)
+    (hw / "name").write_text("k10temp\n")
+    for index, (label, value) in enumerate((("Tctl", 82000), ("Tdie", 62000), ("Tccd1", 70000)), start=1):
+        (hw / f"temp{index}_input").write_text(str(value))
+        (hw / f"temp{index}_label").write_text(label)
+    assert cpu_temperature(str(tmp_path)) == 62.0
+    (hw / "temp2_input").unlink()
+    (hw / "temp2_label").unlink()
+    assert cpu_temperature(str(tmp_path)) == 82.0  # recent Ryzen: Tctl only, no offset
+    intel = tmp_path / "sys/class/hwmon/hwmon3"
+    intel.mkdir()
+    (intel / "name").write_text("coretemp\n")
+    for index, (label, value) in enumerate((("Package id 0", 55000), ("Core 0", 58000)), start=1):
+        (intel / f"temp{index}_input").write_text(str(value))
+        (intel / f"temp{index}_label").write_text(label)
+    assert cpu_temperature(str(tmp_path)) == 82.0  # highest of the CPUs
 
 
 def test_system_thermal_zone_fallback(tmp_path):

@@ -7,7 +7,7 @@ import { buildModel, firstDevice, numberState, type HostModel, type Subject } fr
 import type { HassEntity, HomeAssistant, HostAgentCardConfig, Section, Severity } from "./types";
 
 const VERSION = "__VERSION__";
-export const ALL_SECTIONS: Section[] = ["issues", "system", "disks", "filesystems", "vaults", "jobs"];
+export const ALL_SECTIONS: Section[] = ["issues", "system", "disks", "filesystems", "storage", "gpus", "vaults", "jobs"];
 
 const STATUS_ICON: Record<Severity, string> = {
   ok: "mdi:check-circle",
@@ -97,9 +97,11 @@ export class HostAgentCard extends LitElement {
       <ha-card class="sev-${model.severity}">
         ${this.renderHeader(model, status)}
         ${this.shown("issues") ? this.renderIssues(model) : nothing}
-        ${this.shown("system") && model.system ? this.renderSystem(model.system) : nothing}
+        ${this.shown("system") && model.system ? this.renderSystem(model.system, model) : nothing}
         ${this.shown("disks") && model.disks.length ? this.renderDisks(model.disks) : nothing}
         ${this.shown("filesystems") && model.filesystems.length ? this.renderFilesystems(model.filesystems) : nothing}
+        ${this.shown("storage") && model.pools.length ? this.renderPools(model.pools) : nothing}
+        ${this.shown("gpus") && model.gpus.length ? this.renderGpus(model.gpus) : nothing}
         ${this.shown("vaults") && model.vaults.length ? this.renderVaults(model.vaults) : nothing}
         ${this.shown("jobs") && model.jobs.length ? this.renderJobs(model.jobs) : nothing}
       </ha-card>
@@ -168,7 +170,7 @@ export class HostAgentCard extends LitElement {
     return html`<div class="section-title"><ha-icon icon=${icon}></ha-icon>${this.t(key)}</div>`;
   }
 
-  private renderSystem(system: Subject): TemplateResult {
+  private renderSystem(system: Subject, model: HostModel): TemplateResult {
     const temp = numberState(system.metric("cpu_temperature"));
     const load = numberState(system.metric("load"));
     const memory = numberState(system.metric("memory"));
@@ -200,7 +202,136 @@ export class HostAgentCard extends LitElement {
           ${system.entity.attributes.reboot_required
             ? html`<span class="chip sev-warning"><ha-icon icon="mdi:restart-alert"></ha-icon>${this.t("reboot_required")}</span>`
             : nothing}
+          ${this.renderPowerChip(system)}
+          ${system.entity.attributes.ntp_synchronized === false
+            ? chip("mdi:clock-alert", this.t("clock"), this.t("not_synced"), system.entity, "warning")
+            : nothing}
+          ${this.renderSubjectChip(model.updates, "mdi:package-up", (s) => {
+            const pending = numberState(s.metric("pending")) ?? 0;
+            const security = numberState(s.metric("security")) ?? 0;
+            return pending
+              ? security
+                ? this.t("updates_security", { count: pending, security })
+                : this.t("updates_count", { count: pending })
+              : this.t("up_to_date");
+          })}
+          ${this.renderSubjectChip(model.services, "mdi:cogs", (s) => {
+            const failed = numberState(s.metric("failed")) ?? 0;
+            const down = s.issues.filter((issue) => issue.code.startsWith("service_down")).length;
+            return failed || down ? this.t("services_failed", { count: failed + down }) : this.t("services_ok");
+          })}
+          ${this.renderSubjectChip(model.kernel, "mdi:console-line", (s) => {
+            const errors = numberState(s.metric("errors")) ?? 0;
+            return errors
+              ? this.t("kernel_errors", { count: errors, hours: s.entity.attributes.window_hours ?? 24 })
+              : this.t("kernel_ok");
+          })}
         </div>
+      </div>
+    `;
+  }
+
+  /** Chip summarising a whole-host subject (updates, services, kernel log). */
+  private renderSubjectChip(
+    subject: Subject | undefined,
+    icon: string,
+    text: (subject: Subject) => string,
+  ): TemplateResult | typeof nothing {
+    if (!subject) return nothing;
+    return html`<button class="chip sev-${subject.severity}" @click=${() => this.moreInfo(subject.entity.entity_id)}>
+      <ha-icon icon=${icon}></ha-icon>${text(subject)}
+    </button>`;
+  }
+
+  private renderPowerChip(system: Subject): TemplateResult | typeof nothing {
+    const flags = (system.entity.attributes.pi_flags as string[] | undefined) ?? [];
+    if (!flags.length) return nothing;
+    const now = flags.includes("under_voltage");
+    const label = now ? this.t("undervoltage_now") : flags.includes("under_voltage_occurred")
+      ? this.t("undervoltage_past") : this.t("throttled");
+    return html`<button class="chip sev-${now ? "critical" : "warning"}" @click=${() => this.moreInfo(system.entity.entity_id)}>
+      <ha-icon icon="mdi:flash-alert"></ha-icon>${label}
+    </button>`;
+  }
+
+  private bar(label: string, value: number | undefined, severity: Severity = "ok"): TemplateResult | typeof nothing {
+    if (value === undefined) return nothing;
+    return html`<div class="mini">
+      <span class="mini-label">${label}</span>
+      <div class="bar"><div class="fill sev-${severity}" style="width:${Math.min(value, 100)}%"></div></div>
+      <span class="mini-value">${value.toFixed(0)} %</span>
+    </div>`;
+  }
+
+  private renderGpus(gpus: Subject[]): TemplateResult {
+    return html`
+      <div class="section">
+        ${this.sectionTitle("gpus", "mdi:expansion-card")}
+        ${gpus.map((gpu) => {
+          const attrs = gpu.entity.attributes;
+          const temp = numberState(gpu.metric("temperature"));
+          const power = numberState(gpu.metric("power"));
+          const fan = attrs.fan as number | null | undefined;
+          const details = [
+            attrs.vendor === "nvidia" ? "NVIDIA" : attrs.vendor === "amd" ? "AMD" : attrs.vendor,
+            power !== undefined
+              ? attrs.power_limit_w ? `${power.toFixed(0)} / ${Number(attrs.power_limit_w).toFixed(0)} W` : `${power.toFixed(0)} W`
+              : undefined,
+            fan !== null && fan !== undefined ? this.t("fan", { value: attrs.fan_unit === "rpm" ? `${fan} rpm` : `${fan} %` }) : undefined,
+          ].filter(Boolean);
+          const memorySeverity: Severity = gpu.issues.some((issue) => issue.code === "gpu_memory_high") ? "warning" : "ok";
+          return html`
+            <div class="row" @click=${() => this.moreInfo(gpu.entity.entity_id)}>
+              <ha-icon class="state sev-${gpu.severity}" icon="mdi:expansion-card"></ha-icon>
+              <div class="info">
+                <div class="primary">${attrs.name}</div>
+                <div class="secondary">${details.join(" · ")}</div>
+                ${this.bar(this.t("gpu_load"), numberState(gpu.metric("utilization")))}
+                ${this.bar(this.t("gpu_vram"), numberState(gpu.metric("memory")), memorySeverity)}
+              </div>
+              ${temp !== undefined ? html`<div class="value">${temp.toFixed(0)} °C</div>` : nothing}
+            </div>
+            ${this.renderSubjectIssues(gpu)}
+          `;
+        })}
+      </div>
+    `;
+  }
+
+  private renderPools(pools: Subject[]): TemplateResult {
+    return html`
+      <div class="section">
+        ${this.sectionTitle("storage", "mdi:database")}
+        ${pools.map((pool) => {
+          const attrs = pool.entity.attributes;
+          const capacity = numberState(pool.metric("capacity"));
+          const zfs = attrs.type === "zfs";
+          const details = zfs
+            ? [
+                `ZFS · ${attrs.health}`,
+                attrs.size_bytes ? formatBytes(this.hass, attrs.size_bytes) : undefined,
+                attrs.scrub_running
+                  ? this.t("scrub_running")
+                  : attrs.last_scrub
+                    ? this.t("scrub", { time: relativeTime(this.hass, attrs.last_scrub) })
+                    : this.t("scrub_never"),
+              ]
+            : [
+                `${attrs.level} · [${attrs.status ?? "?"}]`,
+                attrs.action ? `${attrs.action} ${attrs.progress ?? ""} %` : undefined,
+              ];
+          return html`
+            <div class="row" @click=${() => this.moreInfo(pool.entity.entity_id)}>
+              <ha-icon class="state sev-${pool.severity}" icon=${zfs ? "mdi:database" : "mdi:harddisk-plus"}></ha-icon>
+              <div class="info">
+                <div class="primary">${attrs.name}</div>
+                <div class="secondary">${details.filter(Boolean).join(" · ")}</div>
+              </div>
+              ${capacity !== undefined ? html`<div class="value">${capacity.toFixed(0)} %</div>` : nothing}
+            </div>
+            ${this.renderSubjectIssues(pool)}
+          `;
+        })}
       </div>
     `;
   }
@@ -262,6 +393,7 @@ export class HostAgentCard extends LitElement {
                       ? this.t("free", { value: formatBytes(this.hass, attrs.free_bytes) })
                       : this.t("not_mounted")}
                   </span>
+                  ${attrs.read_only ? html`<span class="badge warn">${this.t("read_only")}</span>` : nothing}
                 </div>
                 ${mounted && used !== undefined
                   ? html`<div class="bar">
@@ -295,7 +427,13 @@ export class HostAgentCard extends LitElement {
                   ${attrs.vault}
                   ${attrs.running ? html`<span class="badge">${this.t("running")}</span>` : nothing}
                 </div>
-                <div class="secondary">${this.t("last_success", { time: relativeTime(this.hass, attrs.last_success) })}</div>
+                <div class="secondary">
+                  ${this.t("last_success", { time: relativeTime(this.hass, attrs.last_success) })}
+                  ${attrs.last_stats?.files
+                    ? html` · ${this.t("files", { count: formatNumber(this.hass, attrs.last_stats.files) })}`
+                    : nothing}
+                  ${attrs.last_stats?.size_bytes ? html` · ${formatBytes(this.hass, attrs.last_stats.size_bytes)}` : nothing}
+                </div>
               </div>
               <div class="timeline">
                 ${history.map(
@@ -476,6 +614,14 @@ export class HostAgentCard extends LitElement {
     .day.warning { background: var(--warn); }
     .day.failed { background: var(--crit); }
     .day.running { background: var(--primary-color); opacity: 0.6; }
+    .badge.warn {
+      background: color-mix(in srgb, var(--crit) 15%, transparent);
+      color: var(--crit);
+    }
+    .mini { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 0.8em; }
+    .mini-label { width: 40px; color: var(--secondary-text-color); }
+    .mini .bar { flex: 1; margin-top: 0; height: 6px; }
+    .mini-value { width: 38px; text-align: right; font-variant-numeric: tabular-nums; }
     .badge {
       font-size: 0.75em;
       padding: 1px 6px;

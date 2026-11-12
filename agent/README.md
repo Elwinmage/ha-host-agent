@@ -96,8 +96,40 @@ One device per host (`host_agent_<node_id>`). Entity ids are stable:
 | System (binary_sensor, problem) | `system` | attributes: reboot required, OS, kernel, model |
 | CPU temperature, load, memory used, last boot | `system_cpu_temperature`, `system_load`, `system_memory`, `system_boot` | |
 
+| GPU (binary_sensor, problem) | `gpu_<pci bus>` | NVIDIA / AMD; attributes: name, vendor, power limit, fan, throttle reasons |
+| GPU temperature, load, memory, power | `gpu_<bus>_temperature`, `_utilization`, `_memory`, `_power` | |
+| RAID / ZFS (binary_sensor, problem) | `raid_<md>`, `zpool_<pool>` | state, members, last scrub... |
+| ZFS pool capacity | `zpool_<pool>_capacity` | % |
+| Services (binary_sensor, problem) | `services` | failed units, watched services |
+| Failed units | `services_failed` | |
+| Updates (binary_sensor, problem) | `updates` | package lists in attributes |
+| Pending / security updates | `updates_pending`, `updates_security` | |
+| Kernel log (binary_sensor, problem) | `kernel` | counts per category, last messages |
+| Kernel storage errors | `kernel_errors` | over `window_hours` |
+| Inodes used | `fs_<mount>_inodes` | % (diagnostic) |
+
 Every problem entity carries a `kind` attribute (`host`, `disk`, `filesystem`, `vault`,
-`job`, `system`), used by the card.
+`job`, `system`, `gpu`, `pool`, `services`, `updates`, `kernel`), used by the card.
+
+### Other checks
+
+| Check | Source | Issue |
+|---|---|---|
+| GPU temperature, video memory, slowdown | `nvidia-smi` / amdgpu sysfs | warning / critical; thermal slowdown or power brake = warning |
+| Raspberry Pi power | firmware `get_throttled` (sysfs or `vcgencmd`) | under-voltage now = critical, since boot = warning, throttling = warning |
+| Clock | `timedatectl` | not synchronised = warning |
+| Read-only filesystem | `/proc/mounts` | critical unless listed in `readonly_ok` |
+| Inodes | `statvfs` | thresholds |
+| Kernel log | `journalctl -k` over `window_hours` | filesystem / disk I/O errors = critical; NVMe, SATA link, USB storage resets, under-voltage = warning |
+| systemd | `systemctl` | failed unit = warning, watched service not active = critical |
+| RAID | `/proc/mdstat` | degraded / inactive = critical, rebuild = warning |
+| ZFS | `zpool list`, `zpool status` | not ONLINE or data errors = critical, scrub errors / scrub too old / capacity = warning |
+| Updates | `apt-get -s dist-upgrade`, `dnf check-update` | security updates pending = warning |
+| Backup consistency | `rsync --stats` at the end of each dirvish image log | size or file count drop, burst of changed files vs the median of the previous images = warning |
+
+The agent account is added to the `video`, `render`, `systemd-journal` and `adm` groups (when
+they exist) at each installation, for read access to the GPUs, the Raspberry Pi firmware and
+the kernel log.
 
 Each issue is `{id, subject, code, severity, message}`; `severity` is `warning` or
 `critical`. Disks are keyed by serial number, so `sda` becoming `sdb` changes nothing.

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import gzip
 import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 from host_agent.collectors.base import Collector
@@ -200,6 +202,90 @@ def history(images: list[Image], days: int, now: datetime) -> list[dict[str, Any
     return result
 
 
+@dataclass
+class RsyncStats:
+    files: int | None
+    size: int | None  # bytes
+    transferred: int | None  # regular files transferred (changed or new)
+
+    def as_dict(self) -> dict[str, int | None]:
+        return {"files": self.files, "size_bytes": self.size, "transferred": self.transferred}
+
+
+_STATS = {
+    "files": re.compile(r"^Number of files:\s*([\d,.]+)", re.M),
+    "transferred": re.compile(r"^Number of (?:regular )?files transferred:\s*([\d,.]+)", re.M),
+    "size": re.compile(r"^Total file size:\s*([\d,.]+)", re.M),
+}
+TAIL_BYTES = 64 * 1024
+
+
+def parse_rsync_stats(text: str) -> RsyncStats | None:
+    """`rsync --stats` summary (3.0 and 3.1+ formats, with or without thousands separators)."""
+    values: dict[str, int | None] = {}
+    for name, pattern in _STATS.items():
+        matches = pattern.findall(text)
+        values[name] = int(re.sub(r"[,.]", "", matches[-1])) if matches else None
+    if all(v is None for v in values.values()):
+        return None
+    return RsyncStats(**values)
+
+
+def read_image_stats(image: Path, max_bytes: int) -> RsyncStats | None:
+    """Statistics at the end of the image log (`log`, or `log.gz` once compressed)."""
+    plain, compressed = image / "log", image / "log.gz"
+    try:
+        if plain.is_file():
+            with open(plain, "rb") as fh:
+                fh.seek(max(0, plain.stat().st_size - TAIL_BYTES))
+                return parse_rsync_stats(fh.read().decode("utf-8", errors="replace"))
+        if compressed.is_file() and compressed.stat().st_size <= max_bytes:
+            tail = b""
+            # verbose logs list every file: stream and keep only the end
+            with gzip.open(compressed, "rb") as fh:
+                while chunk := fh.read(1024 * 1024):
+                    tail = (tail + chunk)[-TAIL_BYTES:]
+            return parse_rsync_stats(tail.decode("utf-8", errors="replace"))
+    except (OSError, EOFError, gzip.BadGzipFile):
+        return None
+    return None
+
+
+def baseline_of(previous: list[RsyncStats]) -> RsyncStats | None:
+    """Median of the previous images (at least 3 to be meaningful)."""
+    if len(previous) < 3:
+        return None
+
+    def med(values: list[int | None]) -> int | None:
+        known = [v for v in values if v is not None]
+        return int(median(known)) if known else None
+
+    return RsyncStats(
+        files=med([s.files for s in previous]),
+        size=med([s.size for s in previous]),
+        transferred=med([s.transferred for s in previous]),
+    )
+
+
+def detect_anomalies(
+    last: RsyncStats, base: RsyncStats, cfg: DirvishConfig
+) -> list[tuple[str, dict[str, Any]]]:
+    found: list[tuple[str, dict[str, Any]]] = []
+    if last.size is not None and base.size:
+        drop = round((base.size - last.size) * 100 / base.size)
+        if drop >= cfg.size_drop_pct:
+            found.append(("vault_size_drop", {"pct": drop}))
+    if last.files is not None and base.files:
+        drop = round((base.files - last.files) * 100 / base.files)
+        if drop >= cfg.files_drop_pct:
+            found.append(("vault_files_drop", {"pct": drop, "count": base.files - last.files}))
+    if last.transferred is not None and base.transferred is not None:
+        limit = max(cfg.changes_min, cfg.changes_factor * base.transferred)
+        if last.transferred > limit:
+            found.append(("vault_changes_spike", {"count": last.transferred, "usual": base.transferred}))
+    return found
+
+
 class DirvishCollector(Collector):
     name = "dirvish"
 
@@ -207,6 +293,9 @@ class DirvishCollector(Collector):
         super().__init__(translate)
         self.cfg = cfg
         self.now = now
+        # rsync statistics per finished image (images never change once complete)
+        self._stats: dict[str, RsyncStats | None] = {}
+        self._seen: set[str] = set()
 
     @property
     def interval(self) -> int:
@@ -221,11 +310,21 @@ class DirvishCollector(Collector):
     def collect(self) -> CollectorResult:
         result = CollectorResult()
         now = self.now()
+        self._seen = set()
         for name, path in find_vaults(self.banks()):
             if name in self.cfg.exclude:
                 continue
             result.extend(self._vault(name, path, now))
+        # forget expired images
+        self._stats = {k: v for k, v in self._stats.items() if k in self._seen}
         return result
+
+    def _image_stats(self, image: Image) -> RsyncStats | None:
+        cache_key = str(image.path)
+        self._seen.add(cache_key)
+        if cache_key not in self._stats:
+            self._stats[cache_key] = read_image_stats(image.path, self.cfg.max_log_mb * 2**20)
+        return self._stats[cache_key]
 
     def _vault(self, name: str, path: Path, now: datetime) -> CollectorResult:
         key = f"vault_{slugify(name)}"
@@ -295,6 +394,16 @@ class DirvishCollector(Collector):
             "images": len(images),
             "history": history(images, self.cfg.history_days, now),
         }
+        if self.cfg.anomaly:
+            successes = [img for img in finished if img.status == SUCCESS][: self.cfg.anomaly_history + 1]
+            stats = [self._image_stats(img) for img in successes]
+            if stats and stats[0]:
+                attrs["last_stats"] = stats[0].as_dict()
+                baseline = baseline_of([s for s in stats[1:] if s])
+                if baseline:
+                    attrs["baseline_stats"] = baseline.as_dict()
+                    for code, kwargs in detect_anomalies(stats[0], baseline, self.cfg):
+                        add(code, WARNING, **kwargs)
         return CollectorResult(
             entities=entities,
             readings=[

@@ -81,11 +81,16 @@
         "title": "Host Agent options",
         "menu_options": {
           "general": "General (language, automatic updates)",
+          "system": "System (CPU, memory, power, clock)",
           "smart": "Disks (SMART, self-tests)",
           "filesystem": "Filesystems",
+          "storage": "RAID and ZFS",
           "dirvish": "dirvish backups",
           "jobs": "Jobs (rsync, scripts...)",
-          "system": "System (CPU, memory)",
+          "gpu": "Graphics cards",
+          "services": "systemd services",
+          "updates": "Package updates",
+          "kernel": "Kernel log",
           "advanced": "Advanced (YAML)"
         }
       },
@@ -125,7 +130,10 @@
           "required": "Mountpoints that must be mounted",
           "include_mounts": "Only these mountpoints (empty = all)",
           "warning": "Used space warning",
-          "critical": "Used space critical"
+          "critical": "Used space critical",
+          "inodes_warning": "Inodes used warning",
+          "inodes_critical": "Inodes used critical",
+          "readonly_ok": "Mountpoints expected read-only"
         },
         "data_description": {
           "required": "A missing mountpoint is a critical issue, e.g. /bkup/dirvish."
@@ -140,7 +148,15 @@
           "exclude": "Ignored vaults",
           "max_age_hours": "Maximum age of the last successful backup",
           "history_days": "Days shown in the timeline",
-          "vanished_is_ok": "Count \"file vanished\" warnings (rsync 24) as success"
+          "vanished_is_ok": "Count \"file vanished\" warnings (rsync 24) as success",
+          "anomaly": "Check the consistency of each new backup",
+          "size_drop_pct": "Alert when the size drops by",
+          "files_drop_pct": "Alert when the number of files drops by",
+          "changes_factor": "Alert when changed files exceed the usual number by a factor of",
+          "changes_min": "Minimum number of changed files for that alert"
+        },
+        "data_description": {
+          "anomaly": "Compares rsync statistics of the last image with the previous ones: a sharp drop or a burst of changes can reveal a mass deletion or encryption."
         }
       },
       "jobs": {
@@ -184,6 +200,73 @@
         "description": "`collectors` section of the agent configuration (same syntax as config.example.yaml). {detail}",
         "data": {
           "collectors": "Collectors (YAML)"
+        }
+      },
+      "system": {
+        "title": "System",
+        "description": "{detail}",
+        "data": {
+          "enabled": "Monitor the system",
+          "cpu_warning": "CPU temperature warning",
+          "cpu_critical": "CPU temperature critical",
+          "memory_warning": "Memory used warning",
+          "memory_critical": "Memory used critical",
+          "power": "Raspberry Pi: monitor under-voltage and throttling",
+          "ntp": "Monitor clock synchronisation"
+        }
+      },
+      "gpu": {
+        "title": "Graphics cards",
+        "description": "NVIDIA (nvidia-smi) and AMD (amdgpu) cards are found automatically. {detail}",
+        "data": {
+          "enabled": "Monitor graphics cards",
+          "temperature_warning": "Temperature warning",
+          "temperature_critical": "Temperature critical",
+          "memory_warning": "Video memory warning",
+          "memory_critical": "Video memory critical",
+          "throttle_is_warning": "Warn when the card slows down (temperature, power brake)"
+        }
+      },
+      "services": {
+        "title": "systemd services",
+        "description": "{detail}",
+        "data": {
+          "enabled": "Monitor services",
+          "watch": "Services that must be running",
+          "ignore": "Failed units to ignore (patterns)"
+        },
+        "data_description": {
+          "watch": "e.g. sshd, cron, mosquitto (critical when not running).",
+          "ignore": "Shell patterns, e.g. foo-*.service."
+        }
+      },
+      "storage": {
+        "title": "RAID and ZFS",
+        "description": "mdadm arrays (/proc/mdstat) and ZFS pools are found automatically. {detail}",
+        "data": {
+          "enabled": "Monitor RAID arrays and ZFS pools",
+          "capacity_warning": "Pool capacity warning",
+          "capacity_critical": "Pool capacity critical",
+          "scrub_max_age_days": "Warn when the last scrub is older than"
+        }
+      },
+      "updates": {
+        "title": "Package updates",
+        "description": "Read from the existing package indexes (apt, dnf), without refreshing them. {detail}",
+        "data": {
+          "enabled": "Monitor pending updates",
+          "interval_hours": "Check interval",
+          "security_is_warning": "Warn when security updates are pending"
+        }
+      },
+      "kernel": {
+        "title": "Kernel log",
+        "description": "Storage and filesystem errors, USB resets, under-voltage... counted over a sliding window. {detail}",
+        "data": {
+          "enabled": "Monitor the kernel log",
+          "window_hours": "Window",
+          "patterns": "Extra patterns counted as errors (regex)",
+          "ignore": "Messages to ignore (regex)"
         }
       }
     },

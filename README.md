@@ -20,6 +20,7 @@ Monitoring of Linux hosts (backup servers first) in Home Assistant:
 | 3 | Integration: config flow, SSH bootstrap, deployment, update entity, repairs | ✅ 0.2.0 |
 | 4 | Integration: options flow (one form per collector, jobs editor, YAML) | ✅ 0.3.0 |
 | 5 | Card served by the integration | ✅ 0.3.0 |
+| 6 | GPU (NVIDIA, AMD), Raspberry Pi power, clock, read-only filesystems, inodes, kernel log errors, systemd services, RAID / ZFS, package updates, backup consistency | ✅ 0.4.0 |
 
 ## Integration
 
@@ -85,7 +86,12 @@ option is enabled). An update:
 | Filesystems | mountpoints that must be mounted, mountpoints to watch, used space thresholds |
 | dirvish backups | banks (default: `master.conf`), ignored vaults, maximum age, timeline length, rsync 24 handling |
 | Jobs | add / edit / delete jobs: newest file matching a glob (+ optional success regex), or a report pushed with `host-agent report` |
-| System | CPU temperature and memory thresholds |
+| System | CPU temperature and memory thresholds, Raspberry Pi power, clock synchronisation |
+| RAID and ZFS | pool capacity thresholds, maximum scrub age |
+| Graphics cards | temperature and video memory thresholds, slowdown alerts |
+| systemd services | services that must run, failed units to ignore |
+| Package updates | check interval, security updates as a warning |
+| Kernel log | window, extra patterns, messages to ignore |
 | Advanced | the whole `collectors` section in YAML ([`config.example.yaml`](agent/packaging/config.example.yaml) syntax) |
 
 Every change is sent to the host and validated by the agent itself before being saved; a
@@ -102,15 +108,18 @@ device_id: 0123abcd...      # the host device (visual editor)
 # node_id: bkup             # instead of device_id, for an agent installed by hand
 title: Serveur de sauvegarde  # default: device name
 days: 14                    # backup timeline length
-show: [issues, system, disks, filesystems, vaults, jobs]   # default: all
+show: [issues, system, disks, filesystems, storage, gpus, vaults, jobs]   # default: all
 ```
 
 - header: overall status, agent version, last update, pending agent update, refresh button;
 - current issues with their message;
-- system chips (CPU temperature, load, memory, uptime, pending reboot);
+- system chips (CPU temperature, load, memory, uptime, pending reboot, power, clock,
+  updates, services, kernel log);
 - disks (model, size, power-on hours, last self-test, temperature);
-- filesystems with usage bar and thresholds;
-- dirvish vaults with last success and a per-day timeline (success / warning / failure /
+- filesystems with usage bar and thresholds (read-only flagged);
+- RAID arrays and ZFS pools (state, capacity, last scrub);
+- graphics cards (temperature, power, fan, load and video memory bars);
+- dirvish vaults with last success, size and file count, and a per-day timeline (success / warning / failure /
   running);
 - jobs with last success.
 

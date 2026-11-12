@@ -4,7 +4,7 @@ import { property, state } from "lit/decorators.js";
 import { localize, type StringKey } from "./localize";
 import type { HomeAssistant, HostAgentCardConfig, Section } from "./types";
 
-const SECTIONS: Section[] = ["issues", "system", "disks", "filesystems", "vaults", "jobs"];
+const SECTIONS: Section[] = ["issues", "system", "disks", "filesystems", "storage", "gpus", "vaults", "jobs"];
 
 export class HostAgentCardEditor extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;

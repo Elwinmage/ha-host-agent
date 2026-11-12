@@ -79,6 +79,9 @@ SECTIONS: dict[str, list[Field]] = {
         ("include_mounts", "include_mounts", [], LIST, _clean_list),
         ("warning", "thresholds.warning", 85, _number(1, 100, unit="%"), _int),
         ("critical", "thresholds.critical", 95, _number(1, 100, unit="%"), _int),
+        ("inodes_warning", "inodes.warning", 90, _number(1, 100, unit="%"), _int),
+        ("inodes_critical", "inodes.critical", 97, _number(1, 100, unit="%"), _int),
+        ("readonly_ok", "readonly_ok", [], LIST, _clean_list),
     ],
     "dirvish": [
         ("enabled", "enabled", True, selector.BooleanSelector(), bool),
@@ -87,15 +90,57 @@ SECTIONS: dict[str, list[Field]] = {
         ("max_age_hours", "max_age_hours", 26, _number(1, 2160, unit="h"), _int),
         ("history_days", "history_days", 14, _number(1, 60, unit="d"), _int),
         ("vanished_is_ok", "vanished_is_ok", True, selector.BooleanSelector(), bool),
+        ("anomaly", "anomaly", True, selector.BooleanSelector(), bool),
+        ("size_drop_pct", "size_drop_pct", 20, _number(1, 100, unit="%"), _int),
+        ("files_drop_pct", "files_drop_pct", 20, _number(1, 100, unit="%"), _int),
+        ("changes_factor", "changes_factor", 5.0, _number(1.5, 100, step=0.5), float),
+        ("changes_min", "changes_min", 1000, _number(1, 10_000_000), _int),
     ],
     "system": [
         ("enabled", "enabled", True, selector.BooleanSelector(), bool),
-        ("cpu_warning", "cpu_temperature.warning", 75, _number(30, 110, unit="°C"), _int),
-        ("cpu_critical", "cpu_temperature.critical", 85, _number(30, 120, unit="°C"), _int),
+        ("cpu_warning", "cpu_temperature.warning", 90, _number(30, 110, unit="°C"), _int),
+        ("cpu_critical", "cpu_temperature.critical", 100, _number(30, 120, unit="°C"), _int),
         ("memory_warning", "memory.warning", 90, _number(1, 100, unit="%"), _int),
         ("memory_critical", "memory.critical", 97, _number(1, 100, unit="%"), _int),
+        ("power", "power", True, selector.BooleanSelector(), bool),
+        ("ntp", "ntp", True, selector.BooleanSelector(), bool),
+    ],
+    "gpu": [
+        ("enabled", "enabled", True, selector.BooleanSelector(), bool),
+        ("temperature_warning", "temperature.warning", 85, _number(30, 110, unit="°C"), _int),
+        ("temperature_critical", "temperature.critical", 95, _number(30, 120, unit="°C"), _int),
+        ("memory_warning", "memory.warning", 98, _number(1, 100, unit="%"), _int),
+        ("memory_critical", "memory.critical", 100, _number(1, 100, unit="%"), _int),
+        ("throttle_is_warning", "throttle_is_warning", True, selector.BooleanSelector(), bool),
+    ],
+    "services": [
+        ("enabled", "enabled", True, selector.BooleanSelector(), bool),
+        ("watch", "watch", [], LIST, _clean_list),
+        ("ignore", "ignore", [], LIST, _clean_list),
+    ],
+    "storage": [
+        ("enabled", "enabled", True, selector.BooleanSelector(), bool),
+        ("capacity_warning", "capacity.warning", 80, _number(1, 100, unit="%"), _int),
+        ("capacity_critical", "capacity.critical", 90, _number(1, 100, unit="%"), _int),
+        ("scrub_max_age_days", "scrub_max_age_days", 35, _number(1, 365, unit="d"), _int),
+    ],
+    "updates": [
+        ("enabled", "enabled", True, selector.BooleanSelector(), bool),
+        ("interval_hours", "interval", 21600, _number(1, 168, unit="h"), lambda v: _int(v) * 3600),
+        ("security_is_warning", "security_is_warning", True, selector.BooleanSelector(), bool),
+    ],
+    "kernel": [
+        ("enabled", "enabled", True, selector.BooleanSelector(), bool),
+        ("window_hours", "window_hours", 24, _number(1, 720, unit="h"), _int),
+        ("patterns", "patterns", [], LIST, _clean_list),
+        ("ignore", "ignore", [], LIST, _clean_list),
     ],
 }
+
+# Fields stored in seconds but shown in another unit: (section, path) -> divider
+DISPLAY_DIVIDERS = {("smart", "interval"): 60, ("updates", "interval"): 3600}
+# Fields holding regular expressions: (section, form key)
+REGEX_LISTS = {("kernel", "patterns"), ("kernel", "ignore")}
 
 # Fields checked to be warning <= critical (form keys)
 ORDERED_PAIRS = [
@@ -103,6 +148,8 @@ ORDERED_PAIRS = [
     ("warning", "critical"),
     ("cpu_warning", "cpu_critical"),
     ("memory_warning", "memory_critical"),
+    ("inodes_warning", "inodes_critical"),
+    ("capacity_warning", "capacity_critical"),
 ]
 
 
@@ -110,8 +157,8 @@ def section_schema(name: str, section: dict[str, Any]) -> vol.Schema:
     schema: dict[Any, Any] = {}
     for key, path, default, sel, _conv in SECTIONS[name]:
         value = _get(section, path, default)
-        if path == "interval" and name == "smart":
-            value = int(value) // 60
+        if (name, path) in DISPLAY_DIVIDERS:
+            value = int(value) // DISPLAY_DIVIDERS[(name, path)]
         schema[vol.Optional(key, default=value)] = sel
     return vol.Schema(schema)
 
@@ -167,7 +214,20 @@ class HostAgentOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=["general", "smart", "filesystem", "dirvish", "jobs", "system", "advanced"],
+            menu_options=[
+                "general",
+                "system",
+                "smart",
+                "filesystem",
+                "storage",
+                "dirvish",
+                "jobs",
+                "gpu",
+                "services",
+                "updates",
+                "kernel",
+                "advanced",
+            ],
         )
 
     async def async_step_general(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -202,6 +262,14 @@ class HostAgentOptionsFlow(OptionsFlow):
                     and float(user_input[low]) > float(user_input[high])
                 ):
                     errors[low] = "warning_above_critical"
+            for section_name, key in REGEX_LISTS:
+                if section_name != name:
+                    continue
+                for pattern in _clean_list(user_input.get(key)):
+                    try:
+                        re.compile(pattern)
+                    except re.error:
+                        errors[key] = "invalid_regex"
             window = user_input.get("selftest_window")
             if window and not re.fullmatch(r"\d{1,2}:\d{2}-\d{1,2}:\d{2}", str(window).strip()):
                 errors["selftest_window"] = "invalid_window"
@@ -229,6 +297,21 @@ class HostAgentOptionsFlow(OptionsFlow):
 
     async def async_step_system(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return await self._section_step("system", user_input)
+
+    async def async_step_gpu(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._section_step("gpu", user_input)
+
+    async def async_step_services(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._section_step("services", user_input)
+
+    async def async_step_storage(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._section_step("storage", user_input)
+
+    async def async_step_updates(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._section_step("updates", user_input)
+
+    async def async_step_kernel(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._section_step("kernel", user_input)
 
     # ------------------------------------------------------------------ #
     # Jobs

@@ -13,6 +13,10 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry, async_
 from custom_components.host_agent.const import DOMAIN
 from custom_components.host_agent.ssh import InvalidAuth
 
+# Recent mqtt_mock fixtures leave the MQTT "misc" periodic timer running after the test
+pytestmark = pytest.mark.parametrize("expected_lingering_timers", [True])
+
+
 USER_INPUT = {"host": "192.168.0.20", "port": 22, "username": "pi", "password": "raspberry"}
 MQTT_INPUT = {
     "device_name": "Serveur de sauvegarde",

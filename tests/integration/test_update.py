@@ -20,6 +20,10 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.host_agent.const import DOMAIN
 
+# Recent mqtt_mock fixtures leave the MQTT "misc" periodic timer running after the test
+pytestmark = pytest.mark.parametrize("expected_lingering_timers", [True])
+
+
 UPDATE = "update.serveur_de_sauvegarde_agent"
 
 
@@ -86,10 +90,14 @@ async def test_install_rolls_back_when_agent_silent(hass: HomeAssistant, mqtt_mo
 
 
 async def test_single_device_shared_with_mqtt(hass: HomeAssistant, mqtt_mock, fake_remote) -> None:
-    await setup(hass)
+    entry = await setup(hass)
     registry = dr.async_get(hass)
-    device = registry.async_get_device(connections={(dr.CONNECTION_NETWORK_MAC, "dc:a6:32:00:00:01")})
-    assert device is not None
+    # lookup APIs changed across HA versions: use the helper available everywhere
+    device = next(
+        d
+        for d in dr.async_entries_for_config_entry(registry, entry.entry_id)
+        if (dr.CONNECTION_NETWORK_MAC, "dc:a6:32:00:00:01") in d.connections
+    )
     assert (DOMAIN, "0123456789abcdef") in device.identifiers
 
 
@@ -265,7 +273,11 @@ async def test_remove_entry_uninstalls(hass: HomeAssistant, mqtt_mock, fake_remo
     await hass.config_entries.async_remove(entry.entry_id)
     await hass.async_block_till_done()
     fake_remote.uninstall.assert_awaited_once()
-    mqtt_mock.async_publish.assert_any_call("homeassistant/device/bkup/config", "", 1, True)
+    # newer HA versions add keyword arguments (message_expiry_interval...)
+    assert any(
+        call.args[:4] == ("homeassistant/device/bkup/config", "", 1, True)
+        for call in mqtt_mock.async_publish.call_args_list
+    )
 
 
 async def test_card_served(hass: HomeAssistant, mqtt_mock, fake_remote, tmp_path) -> None:
@@ -290,3 +302,32 @@ async def test_card_served(hass: HomeAssistant, mqtt_mock, fake_remote, tmp_path
 async def test_update_entity_exposes_node_id(hass: HomeAssistant, mqtt_mock, fake_remote) -> None:
     await setup(hass)
     assert hass.states.get(UPDATE).attributes["node_id"] == "bkup"
+
+
+async def test_options_new_sections(hass: HomeAssistant, mqtt_mock, fake_remote) -> None:
+    entry = await setup(hass)
+    result = await _open(hass, entry, "kernel")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"enabled": True, "window_hours": 12, "patterns": ["("], "ignore": []}
+    )
+    assert result["errors"] == {"patterns": "invalid_regex"}
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"enabled": True, "window_hours": 12, "patterns": ["segfault"], "ignore": []}
+    )
+    assert result["type"] == "create_entry"
+    await hass.async_block_till_done()
+    assert entry.options["collectors"]["kernel"] == {
+        "enabled": True,
+        "window_hours": 12,
+        "patterns": ["segfault"],
+        "ignore": [],
+    }
+
+    result = await _open(hass, entry, "updates")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"enabled": True, "interval_hours": 12, "security_is_warning": False}
+    )
+    assert result["type"] == "create_entry"
+    await hass.async_block_till_done()
+    assert entry.options["collectors"]["updates"]["interval"] == 43200
+    assert entry.options["collectors"]["kernel"]["window_hours"] == 12  # other sections kept

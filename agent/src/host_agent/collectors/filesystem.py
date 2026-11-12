@@ -24,6 +24,11 @@ class Mount:
     source: str
     mountpoint: str
     fstype: str
+    options: tuple[str, ...] = ()
+
+    @property
+    def read_only(self) -> bool:
+        return "ro" in self.options
 
 
 @dataclass
@@ -31,6 +36,15 @@ class Usage:
     total: int
     used: int
     free: int  # available to unprivileged users
+    inodes_total: int = 0
+    inodes_free: int = 0
+
+    @property
+    def inodes_pct(self) -> float | None:
+        # btrfs and some network filesystems report no inode limit
+        if not self.inodes_total:
+            return None
+        return round((self.inodes_total - self.inodes_free) * 100 / self.inodes_total, 1)
 
     @property
     def used_pct(self) -> float:
@@ -49,7 +63,8 @@ def parse_mounts(text: str) -> list[Mount]:
     for line in text.splitlines():
         parts = line.split()
         if len(parts) >= 3:
-            mounts.append(Mount(_unescape(parts[0]), _unescape(parts[1]), parts[2]))
+            options = tuple(parts[3].split(",")) if len(parts) > 3 else ()
+            mounts.append(Mount(_unescape(parts[0]), _unescape(parts[1]), parts[2], options))
     return mounts
 
 
@@ -57,7 +72,13 @@ def statvfs_usage(path: str) -> Usage:
     st = os.statvfs(path)
     total = st.f_blocks * st.f_frsize
     free_root = st.f_bfree * st.f_frsize
-    return Usage(total=total, used=total - free_root, free=st.f_bavail * st.f_frsize)
+    return Usage(
+        total=total,
+        used=total - free_root,
+        free=st.f_bavail * st.f_frsize,
+        inodes_total=st.f_files,
+        inodes_free=st.f_ffree,
+    )
 
 
 def mount_slug(mountpoint: str) -> str:
@@ -158,6 +179,17 @@ class FilesystemCollector(Collector):
                 precision=0 if small else 1,
                 **common,
             ),
+            EntitySpec(
+                key=f"{key}_inodes",
+                platform="sensor",
+                name=self.t("fs_inodes", mount=mp),
+                unit="%",
+                state_class="measurement",
+                entity_category="diagnostic",
+                icon="mdi:file-multiple",
+                precision=1,
+                **common,
+            ),
         ]
 
     def _mount_result(self, mount: Mount, persistent: bool) -> CollectorResult:
@@ -176,8 +208,24 @@ class FilesystemCollector(Collector):
                     self.t("fs_usage", value=usage.used_pct, limit=thresholds.limit_for(severity)),
                 )
             )
+        severity = self.cfg.inodes.check(usage.inodes_pct)
+        if severity:
+            issues.append(
+                Issue(
+                    key,
+                    "fs_inodes",
+                    severity,
+                    self.t(
+                        "fs_inodes_high", value=usage.inodes_pct, limit=self.cfg.inodes.limit_for(severity)
+                    ),
+                )
+            )
+        if mount.read_only and mount.mountpoint not in self.cfg.readonly_ok:
+            issues.append(Issue(key, "fs_readonly", CRITICAL, self.t("fs_readonly")))
         attrs = {
             "kind": "filesystem",
+            "read_only": mount.read_only,
+            "inodes_pct": usage.inodes_pct,
             "mountpoint": mount.mountpoint,
             "source": mount.source,
             "fstype": mount.fstype,
@@ -193,6 +241,7 @@ class FilesystemCollector(Collector):
                 problem_reading(key, issues, attrs),
                 Reading(f"{key}_used_pct", usage.used_pct),
                 Reading(f"{key}_free", round(usage.free / (MIB if small else GIB), 2)),
+                Reading(f"{key}_inodes", usage.inodes_pct),
             ],
             issues=issues,
         )
@@ -206,6 +255,7 @@ class FilesystemCollector(Collector):
                 problem_reading(key, issues, {"kind": "filesystem", "mountpoint": mp, "mounted": False}),
                 Reading(f"{key}_used_pct", None),
                 Reading(f"{key}_free", None),
+                Reading(f"{key}_inodes", None),
             ],
             issues=issues,
         )

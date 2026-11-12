@@ -74,8 +74,9 @@ async def _async_options_updated(hass: HomeAssistant, entry: HostAgentConfigEntr
 
 async def async_unload_entry(hass: HomeAssistant, entry: HostAgentConfigEntry) -> bool:
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unloaded:
-        await entry.runtime_data.async_stop()
+    runtime = getattr(entry, "runtime_data", None)
+    if unloaded and runtime is not None:
+        await runtime.async_stop()
     return unloaded
 
 

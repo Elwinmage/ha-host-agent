@@ -81,6 +81,12 @@ collectors:
     #  /bkup/dirvish:
     #    warning: 90
     #    critical: 97
+    inodes:             # used inodes %
+      warning: 90
+      critical: 97
+    # Mountpoints expected read-only; any other read-only mount is critical
+    # (ext4 remounts read-only after an error: backups would silently fail)
+    readonly_ok: []
 
   # dirvish vaults (enabled when a bank is found; banks read from master.conf)
   dirvish:
@@ -92,6 +98,15 @@ collectors:
     max_age_hours: 26   # critical when the last successful image is older
     history_days: 14    # days kept in the timeline attribute (card)
     vanished_is_ok: true  # "warning (24) -- file vanished" counts as success
+    # Consistency of each new image (rsync --stats of the image log) vs the median of
+    # the previous ones: sharp drops or a burst of changes (mass deletion, encryption)
+    anomaly: true
+    anomaly_history: 7
+    size_drop_pct: 20
+    files_drop_pct: 20
+    changes_factor: 5     # changed files > 5 x usual...
+    changes_min: 1000     # ...and more than this
+    max_log_mb: 300       # compressed logs larger than this are not read
     # Immediate update after each backup, in master.conf:
     #   post-server: /usr/local/bin/host-agent notify dirvish
 
@@ -111,9 +126,47 @@ collectors:
   system:
     enabled: true
     interval: 60
-    cpu_temperature:
-      warning: 75
-      critical: 85
+    cpu_temperature:    # Tdie on AMD, package on Intel; 50-90 °C is normal under load
+      warning: 90
+      critical: 100
     memory:             # used %
       warning: 90
       critical: 97
+    power: true         # Raspberry Pi: under-voltage / throttling flags
+    ntp: true           # clock synchronised (timedatectl)
+
+  # NVIDIA (nvidia-smi) and AMD (amdgpu sysfs) graphics cards
+  gpu:
+    enabled: true
+    interval: 60
+    temperature: {warning: 85, critical: 95}
+    memory: {warning: 98, critical: 100}   # video memory used %
+    throttle_is_warning: true              # thermal slowdown, power brake
+
+  # Failed systemd units, services that must run
+  services:
+    enabled: true
+    interval: 120
+    watch: []           # e.g. [sshd, cron, mosquitto]: critical when not active
+    ignore: []          # failed units to ignore (shell patterns)
+
+  # mdadm arrays and ZFS pools
+  storage:
+    enabled: true
+    interval: 600
+    capacity: {warning: 80, critical: 90}  # ZFS pools
+    scrub_max_age_days: 35
+
+  # Pending package updates (apt / dnf), from the existing indexes
+  updates:
+    enabled: true
+    interval: 21600
+    security_is_warning: true
+
+  # Storage / filesystem errors, USB resets, under-voltage in the kernel log
+  kernel:
+    enabled: true
+    interval: 300
+    window_hours: 24
+    patterns: []        # extra regexes counted as errors
+    ignore: []          # regexes of messages to ignore

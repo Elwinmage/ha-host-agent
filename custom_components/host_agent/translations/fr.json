@@ -81,11 +81,16 @@
         "title": "Options de Host Agent",
         "menu_options": {
           "general": "Général (langue, mises à jour automatiques)",
+          "system": "Système (CPU, mémoire, alimentation, horloge)",
           "smart": "Disques (SMART, auto-tests)",
           "filesystem": "Systèmes de fichiers",
+          "storage": "RAID et ZFS",
           "dirvish": "Sauvegardes dirvish",
           "jobs": "Tâches (rsync, scripts…)",
-          "system": "Système (CPU, mémoire)",
+          "gpu": "Cartes graphiques",
+          "services": "Services systemd",
+          "updates": "Mises à jour des paquets",
+          "kernel": "Journal du noyau",
           "advanced": "Avancé (YAML)"
         }
       },
@@ -125,7 +130,10 @@
           "required": "Points de montage obligatoires",
           "include_mounts": "Uniquement ces points de montage (vide = tous)",
           "warning": "Espace utilisé : avertissement",
-          "critical": "Espace utilisé : critique"
+          "critical": "Espace utilisé : critique",
+          "inodes_warning": "Inodes utilisés : avertissement",
+          "inodes_critical": "Inodes utilisés : critique",
+          "readonly_ok": "Points de montage attendus en lecture seule"
         },
         "data_description": {
           "required": "Un point de montage absent est une anomalie critique, ex. /bkup/dirvish."
@@ -140,7 +148,15 @@
           "exclude": "Vaults ignorés",
           "max_age_hours": "Âge maximal de la dernière sauvegarde réussie",
           "history_days": "Jours affichés dans la frise",
-          "vanished_is_ok": "Compter les avertissements « file vanished » (rsync 24) comme un succès"
+          "vanished_is_ok": "Compter les avertissements « file vanished » (rsync 24) comme un succès",
+          "anomaly": "Vérifier la cohérence de chaque nouvelle sauvegarde",
+          "size_drop_pct": "Alerter quand la taille baisse de",
+          "files_drop_pct": "Alerter quand le nombre de fichiers baisse de",
+          "changes_factor": "Alerter quand les fichiers modifiés dépassent l'habitude d'un facteur",
+          "changes_min": "Nombre minimal de fichiers modifiés pour cette alerte"
+        },
+        "data_description": {
+          "anomaly": "Compare les statistiques rsync de la dernière image aux précédentes : une forte baisse ou une rafale de modifications peut révéler une suppression ou un chiffrement massifs."
         }
       },
       "jobs": {
@@ -184,6 +200,73 @@
         "description": "Section `collectors` de la configuration de l'agent (même syntaxe que config.example.yaml). {detail}",
         "data": {
           "collectors": "Collecteurs (YAML)"
+        }
+      },
+      "system": {
+        "title": "Système",
+        "description": "{detail}",
+        "data": {
+          "enabled": "Surveiller le système",
+          "cpu_warning": "Température CPU : avertissement",
+          "cpu_critical": "Température CPU : critique",
+          "memory_warning": "Mémoire utilisée : avertissement",
+          "memory_critical": "Mémoire utilisée : critique",
+          "power": "Raspberry Pi : surveiller la sous-tension et le bridage",
+          "ntp": "Surveiller la synchronisation de l'horloge"
+        }
+      },
+      "gpu": {
+        "title": "Cartes graphiques",
+        "description": "Les cartes NVIDIA (nvidia-smi) et AMD (amdgpu) sont détectées automatiquement. {detail}",
+        "data": {
+          "enabled": "Surveiller les cartes graphiques",
+          "temperature_warning": "Température : avertissement",
+          "temperature_critical": "Température : critique",
+          "memory_warning": "Mémoire vidéo : avertissement",
+          "memory_critical": "Mémoire vidéo : critique",
+          "throttle_is_warning": "Alerter quand la carte ralentit (température, frein de puissance)"
+        }
+      },
+      "services": {
+        "title": "Services systemd",
+        "description": "{detail}",
+        "data": {
+          "enabled": "Surveiller les services",
+          "watch": "Services qui doivent tourner",
+          "ignore": "Unités en échec à ignorer (motifs)"
+        },
+        "data_description": {
+          "watch": "ex. sshd, cron, mosquitto (critique s'ils ne tournent pas).",
+          "ignore": "Motifs shell, ex. foo-*.service."
+        }
+      },
+      "storage": {
+        "title": "RAID et ZFS",
+        "description": "Les grappes mdadm (/proc/mdstat) et les pools ZFS sont détectés automatiquement. {detail}",
+        "data": {
+          "enabled": "Surveiller les grappes RAID et les pools ZFS",
+          "capacity_warning": "Remplissage : avertissement",
+          "capacity_critical": "Remplissage : critique",
+          "scrub_max_age_days": "Alerter quand le dernier scrub date de plus de"
+        }
+      },
+      "updates": {
+        "title": "Mises à jour des paquets",
+        "description": "Lues dans les index de paquets existants (apt, dnf), sans les rafraîchir. {detail}",
+        "data": {
+          "enabled": "Surveiller les mises à jour en attente",
+          "interval_hours": "Intervalle de vérification",
+          "security_is_warning": "Alerter quand des mises à jour de sécurité sont en attente"
+        }
+      },
+      "kernel": {
+        "title": "Journal du noyau",
+        "description": "Erreurs de stockage et de systèmes de fichiers, réinitialisations USB, sous-tensions… comptées sur une fenêtre glissante. {detail}",
+        "data": {
+          "enabled": "Surveiller le journal du noyau",
+          "window_hours": "Fenêtre",
+          "patterns": "Motifs supplémentaires comptés comme erreurs (regex)",
+          "ignore": "Messages à ignorer (regex)"
         }
       }
     },

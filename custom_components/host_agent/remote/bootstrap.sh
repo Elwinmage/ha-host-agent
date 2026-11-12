@@ -38,6 +38,11 @@ printf 'restrict %s\n' "$(cat "${DIR}/authorized_key.pub")" > "${ADMIN_HOME}/.ss
 chown "${ADMIN}:${ADMIN}" "${ADMIN_HOME}/.ssh/authorized_keys"
 chmod 0600 "${ADMIN_HOME}/.ssh/authorized_keys"
 
+# Read access for the GPU, Raspberry Pi firmware and kernel log collectors
+for group in video render systemd-journal adm; do
+    getent group "${group}" >/dev/null 2>&1 && usermod -aG "${group}" host-agent || true
+done
+
 install -d -m 0755 /usr/local/lib/host-agent
 install -m 0755 -o root -g root "${DIR}/host-agent-admin" /usr/local/lib/host-agent/host-agent-admin
 

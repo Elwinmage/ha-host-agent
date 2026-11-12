@@ -23,6 +23,11 @@ if ! id host-agent >/dev/null 2>&1; then
     useradd --system --no-create-home --shell /usr/sbin/nologin host-agent
 fi
 
+# Read access for the GPU, Raspberry Pi firmware and kernel log collectors
+for group in video render systemd-journal adm; do
+    getent group "${group}" >/dev/null 2>&1 && usermod -aG "${group}" host-agent || true
+done
+
 VERSION="$(python3 "${PYZ}" version | awk '{print $2}')"
 install -d -m 0755 "${PREFIX}/versions/${VERSION}"
 install -m 0644 "${PYZ}" "${PREFIX}/versions/${VERSION}/host-agent.pyz"

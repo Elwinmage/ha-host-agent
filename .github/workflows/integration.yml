@@ -27,11 +27,15 @@ jobs:
 
   hass:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # each Python gets the newest Home Assistant it supports
+        python: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
       - run: pip install pytest-homeassistant-custom-component asyncssh mypy
       - run: python -m mypy custom_components/host_agent --ignore-missing-imports --follow-imports=silent
       - run: python -m pytest tests/integration -q
