@@ -4,6 +4,7 @@ checks of the system, filesystem and dirvish collectors."""
 from __future__ import annotations
 
 import gzip
+import io
 import os
 from datetime import datetime, timedelta
 
@@ -343,6 +344,39 @@ def test_filesystem_readonly_and_inodes(t_en):
     assert r["fs_bkup_dirvish_inodes"].state == 98.0
     assert r["fs_boot_firmware"].state == "OFF"
     assert r["fs_boot_firmware_inodes"].state is None
+
+
+def test_filesystem_reads_host_mount_table(t_en, monkeypatch):
+    # The agent's namespace (ProtectSystem=strict) shows everything read-only:
+    # options must come from PID 1's table
+    host = "/dev/sda1 /data ext4 rw,relatime 0 0\n"
+    agent_ns = "/dev/sda1 /data ext4 ro,relatime 0 0\n"
+    real_open = open
+
+    def fake_open(path, *args, **kwargs):
+        if path == "/proc/1/mounts":
+            return io.StringIO(host)
+        if path == "/proc/self/mounts":
+            return io.StringIO(agent_ns)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    usage = {"/data": Usage(total=100, used=10, free=90)}
+    collector = FilesystemCollector(FilesystemConfig(), t_en, usage_reader=usage.__getitem__)
+    r = readings(collector.collect())
+    assert r["fs_data"].state == "OFF"
+    assert r["fs_data"].attrs["read_only"] is False
+
+    # hidepid: only the agent's namespace is readable, read-only state is unknown
+    def no_pid1(path, *args, **kwargs):
+        if path == "/proc/1/mounts":
+            raise PermissionError(path)
+        return fake_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", no_pid1)
+    r = readings(collector.collect())
+    assert r["fs_data"].state == "OFF"
+    assert r["fs_data"].attrs["read_only"] is None
 
 
 # --------------------------------------------------------------------------- #

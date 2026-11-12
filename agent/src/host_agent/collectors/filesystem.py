@@ -99,11 +99,21 @@ class FilesystemCollector(Collector):
         self.cfg = cfg
         self._read_mounts = mounts_reader or self._proc_mounts
         self._usage = usage_reader
+        # False when only the agent's own mount namespace could be read
+        self.readonly_reliable = True
 
-    @staticmethod
-    def _proc_mounts() -> str:
-        with open("/proc/self/mounts", encoding="utf-8") as fh:
-            return fh.read()
+    def _proc_mounts(self) -> str:
+        # The service runs with ProtectSystem=strict: in its own mount namespace every
+        # filesystem is mounted read-only. PID 1's table gives the host's real options.
+        try:
+            with open("/proc/1/mounts", encoding="utf-8") as fh:
+                text = fh.read()
+            self.readonly_reliable = True
+            return text
+        except OSError:  # /proc mounted with hidepid
+            self.readonly_reliable = False
+            with open("/proc/self/mounts", encoding="utf-8") as fh:
+                return fh.read()
 
     @property
     def interval(self) -> int:
@@ -220,11 +230,11 @@ class FilesystemCollector(Collector):
                     ),
                 )
             )
-        if mount.read_only and mount.mountpoint not in self.cfg.readonly_ok:
+        if self.readonly_reliable and mount.read_only and mount.mountpoint not in self.cfg.readonly_ok:
             issues.append(Issue(key, "fs_readonly", CRITICAL, self.t("fs_readonly")))
         attrs = {
             "kind": "filesystem",
-            "read_only": mount.read_only,
+            "read_only": mount.read_only if self.readonly_reliable else None,
             "inodes_pct": usage.inodes_pct,
             "mountpoint": mount.mountpoint,
             "source": mount.source,
