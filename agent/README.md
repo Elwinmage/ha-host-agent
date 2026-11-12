@@ -120,7 +120,7 @@ Every problem entity carries a `kind` attribute (`host`, `disk`, `filesystem`, `
 | Clock | `timedatectl` | not synchronised = warning |
 | Read-only filesystem | `/proc/mounts` | critical unless listed in `readonly_ok` |
 | Inodes | `statvfs` | thresholds |
-| Kernel log | `journalctl -k` over `window_hours` | filesystem / disk I/O errors = critical; NVMe, SATA link, USB storage resets, under-voltage = warning |
+| Kernel log | `journalctl -k` over `window_hours` | filesystem / disk I/O errors = critical; NVMe, SATA link, USB storage resets (only mass-storage devices, outside the 2 min after a resume or boot), under-voltage = warning |
 | systemd | `systemctl` | failed unit = warning, watched service not active = critical |
 | RAID | `/proc/mdstat` | degraded / inactive = critical, rebuild = warning |
 | ZFS | `zpool list`, `zpool status` | not ONLINE or data errors = critical, scrub errors / scrub too old / capacity = warning |

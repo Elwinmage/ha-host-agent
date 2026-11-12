@@ -163,7 +163,8 @@ collectors:
     interval: 21600
     security_is_warning: true
 
-  # Storage / filesystem errors, USB resets, under-voltage in the kernel log
+  # Storage / filesystem errors, USB storage resets (other USB devices and the resets
+  # that follow a resume or a boot are ignored), under-voltage in the kernel log
   kernel:
     enabled: true
     interval: 300

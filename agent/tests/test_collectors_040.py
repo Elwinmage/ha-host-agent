@@ -20,7 +20,7 @@ from host_agent.collectors.dirvish import (
 )
 from host_agent.collectors.filesystem import FilesystemCollector, Usage, parse_mounts
 from host_agent.collectors.gpu import GpuCollector, parse_nvidia_csv, read_amd
-from host_agent.collectors.kernel import KernelCollector, classify
+from host_agent.collectors.kernel import KernelCollector, UsbFilter, classify, line_time
 from host_agent.collectors.services import ServicesCollector, parse_failed
 from host_agent.collectors.storage import StorageCollector, parse_mdstat
 from host_agent.collectors.system import SystemCollector
@@ -269,7 +269,8 @@ def test_dnf():
 # Kernel log
 # --------------------------------------------------------------------------- #
 
-JOURNAL = """2026-11-12T03:10:01+0100 bkup kernel: usb 2-1: reset SuperSpeed USB device number 2 using xhci_hcd
+JOURNAL = """2026-11-12T03:00:00+0100 bkup kernel: usb-storage 2-1:1.0: USB Mass Storage device detected
+2026-11-12T03:10:01+0100 bkup kernel: usb 2-1: reset SuperSpeed USB device number 2 using xhci_hcd
 2026-11-12T03:10:02+0100 bkup kernel: sd 0:0:0:0: [sda] tag#3 uas_eh_abort_handler 0 uas-tag 4 inflight: IN
 2026-11-12T03:10:03+0100 bkup kernel: blk_update_request: I/O error, dev sda, sector 123456 op 0x0:(READ)
 2026-11-12T03:10:04+0100 bkup kernel: EXT4-fs error (device sda1): ext4_find_entry:1455: inode #2: comm ls
@@ -290,6 +291,46 @@ def test_kernel(t_en):
     assert ("kernel_filesystem", "critical") in codes(r["kernel"])
     assert ("kernel_usb", "warning") in codes(r["kernel"])
     assert "-6h" in run.calls[0]
+
+
+USB_JOURNAL = """2026-11-12T08:00:00+0100 pc kernel: Linux version 6.17.0-6-generic (buildd@lcy02)
+2026-11-12T08:00:20+0100 pc kernel: usb 2-2: reset SuperSpeed USB device number 3 using xhci_hcd
+2026-11-12T09:00:00+0100 pc kernel: usb 1-4: reset full-speed USB device number 5 using xhci_hcd
+2026-11-12T12:00:00+0100 pc kernel: PM: suspend exit
+2026-11-12T12:00:03+0100 pc kernel: usb 2-2: reset SuperSpeed USB device number 3 using xhci_hcd
+2026-11-12T12:00:04+0100 pc kernel: usb 1-4: reset full-speed USB device number 5 using xhci_hcd
+2026-11-12T15:30:00+0100 pc kernel: usb 2-2: reset SuperSpeed USB device number 3 using xhci_hcd
+2026-11-12T15:30:01+0100 pc kernel: usb 3-1: reset high-speed USB device number 2 using xhci_hcd
+2026-11-12T15:30:02+0100 pc kernel: sd 6:0:0:0: [sdb] tag#5 uas_eh_abort_handler 0 uas-tag 1 inflight: CMD
+"""
+
+
+@pytest.fixture
+def usb_root(tmp_path):
+    devices = tmp_path / "sys/bus/usb/devices"
+    # 2-2: UAS disk enclosure, 1-4: keyboard (HID), 3-1 unplugged since
+    for iface, cls in (("2-2:1.0", "08"), ("1-4:1.0", "03"), ("1-4:1.1", "03")):
+        (devices / iface).mkdir(parents=True)
+        (devices / iface / "bInterfaceClass").write_text(cls + "\n")
+    return tmp_path
+
+
+def test_kernel_usb_storage_only(usb_root):
+    import re
+
+    lines = USB_JOURNAL.splitlines()
+    counts, recent = classify(lines, [], [], UsbFilter(lines, str(usb_root)))
+    # Kept: the disk reset outside of boot/resume, and the UAS abort.
+    # Dropped: boot and resume resets, the keyboard, the unknown unplugged device.
+    assert counts == {"usb": 2}
+    assert [r["line"].split(" kernel: ")[1][:13] for r in recent] == ["usb 2-2: rese", "sd 6:0:0:0: ["]
+    # Without the filter every reset counts
+    assert classify(lines, [], [re.compile("^$")])[0] == {"usb": 7}
+
+
+def test_line_time():
+    assert line_time("2026-11-12T12:00:03+0100 pc kernel: x").isoformat() == "2026-11-12T12:00:03+01:00"
+    assert line_time("garbage") is None
 
 
 # --------------------------------------------------------------------------- #
