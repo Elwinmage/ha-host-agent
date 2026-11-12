@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from host_agent.collectors.base import CommandResult
 from host_agent.collectors.jobs import JobsCollector, write_report
 from host_agent.collectors.system import SystemCollector, cpu_temperature, memory_used_pct
 from host_agent.config import ConfigError, JobsConfig, JobSpec, SystemConfig, Thresholds, parse_config
@@ -127,7 +128,8 @@ def test_system(fake_root, t_en):
     assert cpu_temperature(str(fake_root)) == 78.3
     assert memory_used_pct(str(fake_root)) == 60.0
     cfg = SystemConfig(cpu_temperature=Thresholds(75, 85), memory=Thresholds(50, 90))
-    result = SystemCollector(cfg, t_en, root=str(fake_root), now=lambda: NOW).collect()
+    synced = lambda args, timeout: CommandResult(0, "yes\n", "")  # noqa: E731 - NTP synchronized
+    result = SystemCollector(cfg, t_en, root=str(fake_root), now=lambda: NOW, runner=synced).collect()
     r = readings(result)
     assert r["system_cpu_temperature"].state == 78.3
     assert r["system_load"].state == 0.42

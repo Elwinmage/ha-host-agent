@@ -134,7 +134,8 @@ def amd_root(tmp_path):
     return tmp_path
 
 
-def test_amd(amd_root, t_fr):
+def test_amd(amd_root, t_fr, monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: None)  # no nvidia-smi on this host
     (gpu,) = read_amd(str(amd_root))
     assert gpu.name == "Radeon RX 6800"
     assert gpu.temperature == 61.0  # edge; junction kept in the attributes
@@ -143,7 +144,7 @@ def test_amd(amd_root, t_fr):
     assert gpu.power == 187.0 and gpu.power_limit == 203.0
     hwmon = next(amd_root.glob("sys/devices/*/*/hwmon/hwmon3"))
     (hwmon / "temp1_input").write_text("96000")
-    collector = GpuCollector(GpuConfig(nvidia_smi="/nonexistent"), t_fr, root=str(amd_root))
+    collector = GpuCollector(GpuConfig(), t_fr, root=str(amd_root))
     reading = readings(collector.collect())["gpu_0000_03_00_0"]
     assert reading.attrs["issues"][0]["message"] == "Température 96.0 °C (seuil 95 °C)"
 
