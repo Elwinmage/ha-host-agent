@@ -49,17 +49,34 @@ repos:
           [ "$a" = "$m" ] || { echo "agent $a != manifest $m"; exit 1; }'
         files: ^(agent/src/host_agent/__init__\.py|custom_components/host_agent/manifest\.json)$
         pass_filenames: false
+      # identical dependency lists let hooks share one environment
+      - id: agent-mypy
+        name: agent typecheck (mypy)
+        language: python
+        additional_dependencies: &agent_deps [pytest, paho-mqtt, pyyaml, mypy, types-PyYAML]
+        entry: sh -c 'cd agent && python -m mypy src'
+        files: ^agent/(src/|pyproject\.toml$)
+        pass_filenames: false
       - id: agent-tests
         name: agent tests (pytest)
         language: python
-        additional_dependencies: [pytest, paho-mqtt, pyyaml]
+        additional_dependencies: *agent_deps
         entry: sh -c 'cd agent && python -m pytest -q -p no:cacheprovider'
         files: ^agent/
+        pass_filenames: false
+      # same command as the CI: it type-checks against the newest Home Assistant
+      # the hook's Python supports (refresh with `pre-commit clean` after an HA release)
+      - id: integration-mypy
+        name: integration typecheck (mypy)
+        language: python
+        additional_dependencies: &hass_deps [pytest-homeassistant-custom-component, asyncssh, paho-mqtt, pyyaml, mypy]
+        entry: python -m mypy custom_components/host_agent --ignore-missing-imports --follow-imports=silent
+        files: ^custom_components/host_agent/.*\.py$
         pass_filenames: false
       - id: integration-tests
         name: integration and helper tests (pytest)
         language: python
-        additional_dependencies: [pytest-homeassistant-custom-component, asyncssh, paho-mqtt, pyyaml]
+        additional_dependencies: *hass_deps
         # helper tests need root and are skipped otherwise (CI runs them with sudo)
         entry: python -m pytest -q -p no:cacheprovider tests/integration tests/remote
         files: ^(custom_components/host_agent/|tests/|agent/src/)

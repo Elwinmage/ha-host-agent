@@ -7,7 +7,11 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-import voluptuous as vol
+try:
+    # Home Assistant 2026.10+ validates flows with probatio (voluptuous-compatible)
+    import probatio as vol
+except ImportError:  # older Home Assistant
+    import voluptuous as vol  # type: ignore[no-redef,unused-ignore]
 from homeassistant.config_entries import ConfigFlowResult, OptionsFlow
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import selector

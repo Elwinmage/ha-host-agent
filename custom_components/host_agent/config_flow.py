@@ -9,7 +9,11 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-import voluptuous as vol
+try:
+    # Home Assistant 2026.10+ validates flows with probatio (voluptuous-compatible)
+    import probatio as vol
+except ImportError:  # older Home Assistant
+    import voluptuous as vol  # type: ignore[no-redef,unused-ignore]
 from homeassistant.components import mqtt
 from homeassistant.components.network import async_get_source_ip
 from homeassistant.config_entries import (
