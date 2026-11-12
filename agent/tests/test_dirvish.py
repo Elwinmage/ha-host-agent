@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta
 
 import pytest
@@ -45,6 +46,9 @@ def make_image(bank, vault, day: datetime, status="success", summary=True, compl
                 bank=bank, vault=vault, image=image.name, begin=begin, complete=complete, status=status
             )
         )
+    else:
+        # A running image is dated by its directory: pin it to the test clock, not today
+        os.utime(image, (day.timestamp(), day.timestamp()))
     return image
 
 
