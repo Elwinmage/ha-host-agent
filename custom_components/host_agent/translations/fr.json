@@ -159,7 +159,7 @@
       },
       "job_edit": {
         "title": "Tâche",
-        "description": "**Fichier** : le fichier le plus récent correspondant au motif représente la dernière exécution (ex. un log). **Rapport** : la tâche appelle `host-agent report \"<nom>\" [--failed]` à la fin. {detail}",
+        "description": "**Fichier** : le fichier le plus récent correspondant au motif représente la dernière exécution (ex. un log). **Rapport** : la tâche appelle `host-agent report \"nom de la tâche\" [--failed]` à la fin. {detail}",
         "data": {
           "name": "Nom",
           "source": "Source",

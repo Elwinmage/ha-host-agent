@@ -159,7 +159,7 @@
       },
       "job_edit": {
         "title": "Job",
-        "description": "**File**: the newest file matching the pattern is the last run (e.g. a log). **Report**: the job calls `host-agent report \"<name>\" [--failed]` when it ends. {detail}",
+        "description": "**File**: the newest file matching the pattern is the last run (e.g. a log). **Report**: the job calls `host-agent report \"job name\" [--failed]` when it ends. {detail}",
         "data": {
           "name": "Name",
           "source": "Source",
