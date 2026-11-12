@@ -18,6 +18,7 @@ from homeassistant.loader import async_get_integration
 from . import remote
 from .bundle import BundleError, load_bundle
 from .const import CONF_NODE_ID, DEFAULT_DISCOVERY_PREFIX, DOMAIN
+from .events import ProblemEvents
 from .runtime import HostAgentRuntime
 from .ssh import SshError
 
@@ -62,6 +63,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HostAgentConfigEntry) ->
     runtime = HostAgentRuntime(hass, entry, bundle)
     await runtime.async_start()
     entry.runtime_data = runtime
+    # host_agent_problem events: alert automations without an entity list
+    entry.async_on_unload(ProblemEvents(hass, entry).async_start())
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

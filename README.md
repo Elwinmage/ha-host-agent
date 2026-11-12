@@ -170,6 +170,9 @@ requires the icon in [home-assistant/brands](https://github.com/home-assistant/b
 
 `blueprints/automation/host_agent/host_agent_alert.yaml`
 
+- no entity to choose: by default it watches the **Problem** sensor of every host, hosts
+  added later included (one alert per host, listing all its issues); select problem
+  sensors (hosts, disks, filesystems, vaults…) to restrict it;
 - alert after a confirmation delay when a problem sensor turns on, filtered by severity;
 - new alert when another issue appears while a problem is active;
 - "back to normal" and "agent offline / back online" alerts (LWT based);
@@ -177,6 +180,20 @@ requires the icon in [home-assistant/brands](https://github.com/home-assistant/b
 - your own actions (mobile app, Telegram, e-mail…) with `title`, `message`,
   `severity`, `event`, `host`, `issues` variables;
 - no alert storm when Home Assistant restarts.
+
+The integration fires a `host_agent_problem` event for every change of a problem sensor,
+usable in your own automations too:
+
+| Field | Content |
+|---|---|
+| `transition` | `problem` (off → on), `new_issue` (issues changed while on), `resolved` (on → off), `offline` (→ unavailable), `online` (unavailable → known) |
+| `entity_id`, `name` | problem sensor |
+| `host`, `node_id` | host |
+| `host_sensor` | `true` for the host's own Problem sensor, `false` for a disk, filesystem, vault… |
+| `kind` | `host`, `disk`, `filesystem`, `vault`, `job`, `system`, `gpu`… |
+| `state`, `previous_state`, `issues`, `previous_issues` | new and previous values |
+| `elapsed` | seconds spent in the previous state (for `new_issue`: since the problem started) |
+| `since` | start of the new state (ISO 8601) |
 
 Example action:
 
