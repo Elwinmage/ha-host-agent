@@ -49,3 +49,18 @@ repos:
           [ "$a" = "$m" ] || { echo "agent $a != manifest $m"; exit 1; }'
         files: ^(agent/src/host_agent/__init__\.py|custom_components/host_agent/manifest\.json)$
         pass_filenames: false
+      - id: agent-tests
+        name: agent tests (pytest)
+        language: python
+        additional_dependencies: [pytest, paho-mqtt, pyyaml]
+        entry: sh -c 'cd agent && python -m pytest -q -p no:cacheprovider'
+        files: ^agent/
+        pass_filenames: false
+      - id: integration-tests
+        name: integration and helper tests (pytest)
+        language: python
+        additional_dependencies: [pytest-homeassistant-custom-component, asyncssh, paho-mqtt, pyyaml]
+        # helper tests need root and are skipped otherwise (CI runs them with sudo)
+        entry: python -m pytest -q -p no:cacheprovider tests/integration tests/remote
+        files: ^(custom_components/host_agent/|tests/|agent/src/)
+        pass_filenames: false
