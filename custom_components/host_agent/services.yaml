@@ -1,0 +1,37 @@
+set_kernel_rule:
+  fields:
+    node_id:
+      required: true
+      example: bkup
+      selector:
+        text:
+    category:
+      required: true
+      example: usb
+      selector:
+        select:
+          options:
+            - nvme
+            - ata
+            - usb
+            - power
+            - custom
+          translation_key: kernel_category
+    mode:
+      required: true
+      example: threshold
+      selector:
+        select:
+          options:
+            - ignore
+            - threshold
+            - remove
+          translation_key: kernel_rule_mode
+    threshold:
+      required: false
+      example: 4
+      selector:
+        number:
+          min: 0
+          max: 100000
+          mode: box
