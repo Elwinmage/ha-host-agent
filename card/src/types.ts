@@ -23,6 +23,7 @@ export interface HassDevice {
 }
 
 export interface HomeAssistant {
+  user?: { is_admin?: boolean };
   states: Record<string, HassEntity>;
   entities: Record<string, HassEntityRegistryDisplayEntry>;
   devices: Record<string, HassDevice>;
@@ -40,6 +41,12 @@ export interface HostAgentCardConfig {
   title?: string;
   days?: number;
   show?: Section[];
+  // State of the card when it loads: expanded (everything) or collapsed (header and alarms only)
+  default_state?: "expanded" | "collapsed";
+  // Expand a collapsed card when a critical problem appears
+  auto_expand_critical?: boolean;
+  // Reboot button (when the integration created it for this host); default true
+  show_restart?: boolean;
 }
 
 export type Severity = "ok" | "warning" | "critical" | "unknown";

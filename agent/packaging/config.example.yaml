@@ -171,3 +171,10 @@ collectors:
     window_hours: 24
     patterns: []        # extra regexes counted as errors
     ignore: []          # regexes of messages to ignore
+    # Per-category rules (usually created from the card). Categories: nvme, ata, usb,
+    # power, custom. filesystem and io are critical and can never be hidden.
+    #   ignore: true   -> never reported until the rule is deleted
+    #   threshold: N   -> reported only when more than N events in window_hours
+    rules: {}
+    #  usb: {threshold: 4}
+    #  nvme: {ignore: true}

@@ -32,11 +32,16 @@ CONF_MQTT_USERNAME: Final = "mqtt_username"
 CONF_MQTT_PASSWORD: Final = "mqtt_password"
 CONF_DEVICE_NAME: Final = "device_name"
 CONF_DEPLOYED_VERSION: Final = "deployed_version"
+CONF_MODEL: Final = "model"
 
 # Options
 CONF_AUTO_UPDATE: Final = "auto_update"
 CONF_LANGUAGE: Final = "language"
 CONF_COLLECTORS: Final = "collectors"
+# Remote host actions (opt-in, per host)
+CONF_ALLOW_REBOOT: Final = "allow_reboot"
+CONF_WAKE_ON_LAN: Final = "wake_on_lan"
+CONF_WOL_BROADCAST: Final = "wol_broadcast"
 
 LANGUAGES: Final = ["fr", "en"]
 
@@ -46,6 +51,18 @@ COMMAND_TIMEOUT: Final = 180
 HEALTH_TIMEOUT: Final = 120
 AUTO_UPDATE_DELAY: Final = 120
 AUTO_UPDATE_RETRY: Final = 24 * 3600
+# A reboot requested from Home Assistant is "planned" for this long (offline alerts muted)...
+REBOOT_GRACE: Final = 15 * 60
+# ...and this long after the agent reports again (so the "back online" event is planned too)
+REBOOT_RETURN_GRACE: Final = 60
+
+DEFAULT_WOL_BROADCAST: Final = "255.255.255.255"
+WOL_PORT: Final = 9
+
+SERVICE_SET_KERNEL_RULE: Final = "set_kernel_rule"
+# Kernel message categories a rule can hide (the critical ones, filesystem and io, are protected)
+KERNEL_RULE_CATEGORIES: Final = ["nvme", "ata", "usb", "power", "custom"]
+KERNEL_RULE_MODES: Final = ["ignore", "threshold", "remove"]
 
 ISSUE_HOST_KEY: Final = "host_key_changed"
 ISSUE_PROTOCOL: Final = "protocol_mismatch"

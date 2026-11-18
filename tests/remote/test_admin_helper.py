@@ -194,3 +194,19 @@ def test_uninstall_purge(env):
     assert res.returncode == 0
     assert not (env["root"] / "opt/host-agent").exists()
     assert not (env["root"] / "etc/host-agent").exists()
+
+
+def test_reboot_returns_before_the_host_goes_down(env):
+    import time
+
+    res = helper(env, "reboot")
+    assert res.returncode == 0, res.stderr
+    assert "REBOOTING" in res.stdout
+    log = env["root"] / "fake-systemctl" / "log"
+    # delayed: nothing yet when the command returns, the reboot follows
+    assert not log.exists() or "reboot" not in log.read_text()
+    for _ in range(80):
+        if log.exists() and "reboot" in log.read_text():
+            break
+        time.sleep(0.1)
+    assert "reboot" in log.read_text()

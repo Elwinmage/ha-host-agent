@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import ipaddress
 import re
 from collections.abc import Callable
 from typing import Any
@@ -18,7 +19,16 @@ from homeassistant.helpers import selector
 
 from . import remote
 from .agent_config import CollectorsError, validate_collectors
-from .const import CONF_AUTO_UPDATE, CONF_COLLECTORS, CONF_LANGUAGE, LANGUAGES
+from .const import (
+    CONF_ALLOW_REBOOT,
+    CONF_AUTO_UPDATE,
+    CONF_COLLECTORS,
+    CONF_LANGUAGE,
+    CONF_WAKE_ON_LAN,
+    CONF_WOL_BROADCAST,
+    LANGUAGES,
+)
+from .runtime import wake_supported
 
 LIST = selector.TextSelector(selector.TextSelectorConfig(multiple=True))
 TEXT = selector.TextSelector()
@@ -216,39 +226,38 @@ class HostAgentOptionsFlow(OptionsFlow):
     # ------------------------------------------------------------------ #
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        return self.async_show_menu(
-            step_id="init",
-            menu_options=[
-                "general",
-                "system",
-                "smart",
-                "filesystem",
-                "storage",
-                "dirvish",
-                "jobs",
-                "gpu",
-                "services",
-                "updates",
-                "kernel",
-                "advanced",
-            ],
-        )
+        menu = ["general", "system", "smart", "filesystem", "storage", "dirvish", "jobs", "gpu"]
+        menu += ["services", "updates", "kernel"]
+        if self._kernel_rules:
+            menu.append("kernel_rules")
+        return self.async_show_menu(step_id="init", menu_options=[*menu, "advanced"])
 
     async def async_step_general(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         detail = ""
         options = dict(self.config_entry.options)
+        can_wake = wake_supported(dict(self.config_entry.data))
         if user_input is not None:
-            result, errors, detail = await self._save({**options, **user_input})
-            if result:
-                return result
+            broadcast = str(user_input.get(CONF_WOL_BROADCAST) or "").strip()
+            try:
+                if broadcast:
+                    ipaddress.IPv4Address(broadcast)
+            except ValueError:
+                errors[CONF_WOL_BROADCAST] = "invalid_broadcast"
+            if not errors:
+                result, errors, detail = await self._save({**options, **user_input})
+                if result:
+                    return result
             options.update(user_input)
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_AUTO_UPDATE, default=options.get(CONF_AUTO_UPDATE, False)): bool,
-                vol.Required(CONF_LANGUAGE, default=options.get(CONF_LANGUAGE, "en")): vol.In(LANGUAGES),
-            }
-        )
+        fields: dict[Any, Any] = {
+            vol.Required(CONF_AUTO_UPDATE, default=options.get(CONF_AUTO_UPDATE, False)): bool,
+            vol.Required(CONF_LANGUAGE, default=options.get(CONF_LANGUAGE, "en")): vol.In(LANGUAGES),
+            vol.Required(CONF_ALLOW_REBOOT, default=options.get(CONF_ALLOW_REBOOT, False)): bool,
+        }
+        if can_wake:
+            fields[vol.Required(CONF_WAKE_ON_LAN, default=options.get(CONF_WAKE_ON_LAN, False))] = bool
+            fields[vol.Optional(CONF_WOL_BROADCAST, default=options.get(CONF_WOL_BROADCAST, ""))] = str
+        schema = vol.Schema(fields)
         return self.async_show_form(
             step_id="general", data_schema=schema, errors=errors, description_placeholders={"detail": detail}
         )
@@ -316,6 +325,52 @@ class HostAgentOptionsFlow(OptionsFlow):
 
     async def async_step_kernel(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return await self._section_step("kernel", user_input)
+
+    # ------------------------------------------------------------------ #
+    # Kernel log rules (created from the card, removed here)
+    # ------------------------------------------------------------------ #
+
+    @property
+    def _kernel_rules(self) -> dict[str, Any]:
+        return dict(_get(self._collectors, "kernel.rules", None) or {})
+
+    async def async_step_kernel_rules(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        detail = ""
+        rules = self._kernel_rules
+        if user_input is not None:
+            remove = set(user_input.get("remove") or [])
+            collectors = self._collectors
+            kernel = collectors.setdefault("kernel", {})
+            kept = {category: rule for category, rule in rules.items() if category not in remove}
+            if kept:
+                kernel["rules"] = kept
+            else:
+                kernel.pop("rules", None)
+            result, errors, detail = await self._save_collectors(collectors)
+            if result:
+                return result
+        options = [
+            selector.SelectOptionDict(
+                value=category,
+                label=f"{category} (ignore)"
+                if rule.get("ignore")
+                else f"{category} (> {rule.get('threshold')})",
+            )
+            for category, rule in rules.items()
+        ]
+        return self.async_show_form(
+            step_id="kernel_rules",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("remove"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(options=options, multiple=True)
+                    )
+                }
+            ),
+            errors=errors,
+            description_placeholders={"detail": detail},
+        )
 
     # ------------------------------------------------------------------ #
     # Jobs

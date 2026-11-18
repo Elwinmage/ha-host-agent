@@ -19,6 +19,15 @@ const STATUS_ICON: Record<Severity, string> = {
 export class HostAgentCard extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
   @state() private config?: HostAgentCardConfig;
+  // Ephemeral: back to the configured default when the card is reloaded
+  @state() private expanded = true;
+  // Pending confirmation ("reboot", "<disk>:long") and open panels
+  @state() private confirming?: string;
+  @state() private diskMenu?: string;
+  @state() private ruleEditor?: { category: string; threshold: string };
+  @state() private showRules = false;
+  private lastSeverity?: Severity;
+  private confirmTimer?: number;
 
   public static getConfigElement(): HTMLElement {
     return document.createElement("host-agent-card-editor");
@@ -31,11 +40,19 @@ export class HostAgentCard extends LitElement {
   public setConfig(config: HostAgentCardConfig): void {
     if (!config) throw new Error("Invalid configuration");
     this.config = { days: 14, ...config };
+    this.expanded = (config.default_state ?? "expanded") === "expanded";
+    this.lastSeverity = undefined;
+  }
+
+  public disconnectedCallback(): void {
+    super.disconnectedCallback();
+    window.clearTimeout(this.confirmTimer);
   }
 
   public getCardSize(): number {
     const model = this.model();
     if (!model) return 2;
+    if (!this.expanded) return 1 + model.issues.length;
     return 2 + model.disks.length + model.filesystems.length + model.vaults.length + model.jobs.length;
   }
 
@@ -55,6 +72,17 @@ export class HostAgentCard extends LitElement {
       if (id.includes(prefix) && old.states[id] !== this.hass.states[id]) return true;
     }
     return false;
+  }
+
+  protected willUpdate(changed: PropertyValues): void {
+    if (!changed.has("hass") && !changed.has("config")) return;
+    const severity = this.model()?.severity;
+    // A problem that turns critical (or is critical at load) opens a collapsed card, once:
+    // closing it again by hand is respected until the next critical event
+    if (this.config?.auto_expand_critical && severity === "critical" && this.lastSeverity !== "critical") {
+      this.expanded = true;
+    }
+    this.lastSeverity = severity;
   }
 
   private model(): HostModel | undefined {
@@ -79,6 +107,42 @@ export class HostAgentCard extends LitElement {
     if (entity && this.hass) await this.hass.callService("button", "press", { entity_id: entity.entity_id });
   }
 
+  /** Ask for a second click on a risky action; the request lapses by itself. */
+  private arm(key: string): void {
+    this.confirming = key;
+    window.clearTimeout(this.confirmTimer);
+    this.confirmTimer = window.setTimeout(() => (this.confirming = undefined), 6000);
+  }
+
+  private disarm(): void {
+    window.clearTimeout(this.confirmTimer);
+    this.confirming = undefined;
+  }
+
+  private notify(message: string): void {
+    this.dispatchEvent(new CustomEvent("hass-notification", { detail: { message }, bubbles: true, composed: true }));
+  }
+
+  private async setRule(
+    model: HostModel,
+    category: string,
+    mode: "ignore" | "threshold" | "remove",
+    threshold?: number,
+  ): Promise<void> {
+    if (!this.hass) return;
+    try {
+      await this.hass.callService("host_agent", "set_kernel_rule", {
+        node_id: model.nodeId,
+        category,
+        mode,
+        ...(threshold !== undefined ? { threshold } : {}),
+      });
+      this.ruleEditor = undefined;
+    } catch (err) {
+      this.notify(this.t("rule_error", { error: err instanceof Error ? err.message : String((err as any)?.message ?? err) }));
+    }
+  }
+
   // ------------------------------------------------------------------ //
   // Rendering
   // ------------------------------------------------------------------ //
@@ -93,12 +157,20 @@ export class HostAgentCard extends LitElement {
       return html`<ha-card><div class="empty">${this.t("not_found")}</div></ha-card>`;
     }
     const status = model.offline ? "offline" : model.severity;
+    // Collapsed: the header (coloured by the worst problem) and the alarms, nothing else
+    if (!this.expanded) {
+      return html`
+        <ha-card class="sev-${model.severity} collapsed">
+          ${this.renderHeader(model, status)} ${this.renderIssues(model)}
+        </ha-card>
+      `;
+    }
     return html`
       <ha-card class="sev-${model.severity}">
         ${this.renderHeader(model, status)}
         ${this.shown("issues") ? this.renderIssues(model) : nothing}
         ${this.shown("system") && model.system ? this.renderSystem(model.system, model) : nothing}
-        ${this.shown("disks") && model.disks.length ? this.renderDisks(model.disks) : nothing}
+        ${this.shown("disks") && model.disks.length ? this.renderDisks(model.disks, model.offline) : nothing}
         ${this.shown("filesystems") && model.filesystems.length ? this.renderFilesystems(model.filesystems) : nothing}
         ${this.shown("storage") && model.pools.length ? this.renderPools(model.pools) : nothing}
         ${this.shown("gpus") && model.gpus.length ? this.renderGpus(model.gpus) : nothing}
@@ -138,31 +210,171 @@ export class HostAgentCard extends LitElement {
             </span>
           </div>
         </div>
-        ${model.refresh
-          ? html`<button
-              class="icon-button"
-              title=${this.t("refresh")}
-              ?disabled=${model.offline}
-              @click=${(ev: Event) => this.press(model.refresh, ev)}
-            >
-              <ha-icon icon="mdi:refresh"></ha-icon>
-            </button>`
-          : nothing}
+        <div class="actions">
+          ${this.renderWake(model)} ${this.renderReboot(model)}
+          ${model.refresh
+            ? html`<button
+                class="icon-button"
+                title=${this.t("refresh")}
+                ?disabled=${model.offline}
+                @click=${(ev: Event) => this.press(model.refresh, ev)}
+              >
+                <ha-icon icon="mdi:refresh"></ha-icon>
+              </button>`
+            : nothing}
+          <button
+            class="icon-button"
+            title=${this.t(this.expanded ? "collapse" : "expand")}
+            aria-expanded=${this.expanded ? "true" : "false"}
+            @click=${() => (this.expanded = !this.expanded)}
+          >
+            <ha-icon icon=${this.expanded ? "mdi:chevron-up" : "mdi:chevron-down"}></ha-icon>
+          </button>
+        </div>
       </div>
     `;
   }
 
+  /** Wake-on-LAN: offered while the host is offline, when the integration created the button. */
+  private renderWake(model: HostModel): TemplateResult | typeof nothing {
+    if (!model.offline || !model.wake) return nothing;
+    return html`<button
+      class="icon-button wake"
+      title=${this.t("wake")}
+      ?disabled=${model.wake.state === "unavailable"}
+      @click=${(ev: Event) => this.press(model.wake, ev)}
+    >
+      <ha-icon icon="mdi:power"></ha-icon>
+    </button>`;
+  }
+
+  /** Reboot the host, after a confirmation; hidden by `show_restart: false`. */
+  private renderReboot(model: HostModel): TemplateResult | typeof nothing {
+    if (model.offline || !model.reboot || this.config?.show_restart === false) return nothing;
+    if (this.confirming === "reboot") {
+      return html`<span class="confirm">
+        ${this.t("reboot_confirm")}
+        <button
+          class="btn danger"
+          @click=${async (ev: Event) => {
+            this.disarm();
+            await this.press(model.reboot, ev);
+          }}
+        >
+          ${this.t("confirm")}
+        </button>
+        <button class="btn" @click=${() => this.disarm()}>${this.t("cancel")}</button>
+      </span>`;
+    }
+    return html`<button
+      class="icon-button"
+      title=${this.t("reboot")}
+      ?disabled=${model.reboot.state === "unavailable"}
+      @click=${(ev: Event) => {
+        ev.stopPropagation();
+        this.arm("reboot");
+      }}
+    >
+      <ha-icon icon="mdi:restart"></ha-icon>
+    </button>`;
+  }
+
   private renderIssues(model: HostModel): TemplateResult | typeof nothing {
     if (!model.issues.length || model.offline) return nothing;
+    // Kernel warnings can be hidden or given a threshold (admins); critical ones never
+    const admin = this.hass?.user?.is_admin !== false;
+    const kernelAttrs = model.kernel?.entity.attributes;
+    const protectedCategories = (kernelAttrs?.protected as string[] | undefined) ?? ["filesystem", "io"];
     return html`
       <div class="issues">
-        ${model.issues.map(
-          (issue) => html`<div class="issue ${issue.severity}">
-            <ha-icon icon=${STATUS_ICON[issue.severity]}></ha-icon>
-            <span>${issue.subject_name ? html`<b>${issue.subject_name}</b> · ` : nothing}${issue.message}</span>
-          </div>`,
-        )}
+        ${model.issues.map((issue) => {
+          const category = issue.subject === "kernel" && issue.code.startsWith("kernel_") ? issue.code.slice(7) : undefined;
+          const editable = admin && category !== undefined && !protectedCategories.includes(category);
+          return html`<div class="issue-wrap">
+            <div class="issue ${issue.severity}">
+              <ha-icon icon=${STATUS_ICON[issue.severity]}></ha-icon>
+              <span>${issue.subject_name ? html`<b>${issue.subject_name}</b> · ` : nothing}${issue.message}</span>
+              ${editable
+                ? html`<button
+                    class="icon-button small"
+                    title=${this.t("rule_edit")}
+                    @click=${() => this.toggleRuleEditor(category!, kernelAttrs?.counts?.[category!])}
+                  >
+                    <ha-icon icon="mdi:eye-off-outline"></ha-icon>
+                  </button>`
+                : nothing}
+            </div>
+            ${editable && this.ruleEditor?.category === category ? this.renderRuleEditor(model, category!) : nothing}
+          </div>`;
+        })}
       </div>
+    `;
+  }
+
+  private toggleRuleEditor(category: string, count?: number): void {
+    this.ruleEditor = this.ruleEditor?.category === category ? undefined : { category, threshold: String(count ?? 1) };
+  }
+
+  private renderRuleEditor(model: HostModel, category: string): TemplateResult {
+    const threshold = Number(this.ruleEditor?.threshold);
+    const valid = Number.isInteger(threshold) && threshold >= 0;
+    return html`<div class="rule-editor">
+      <button class="btn" @click=${() => this.setRule(model, category, "ignore")}>
+        <ha-icon icon="mdi:eye-off"></ha-icon>${this.t("rule_hide")}
+      </button>
+      <div class="threshold">
+        <span>${this.t("rule_threshold")}</span>
+        <input
+          type="number"
+          min="0"
+          .value=${this.ruleEditor?.threshold ?? ""}
+          @input=${(ev: Event) => {
+            this.ruleEditor = { category, threshold: (ev.target as HTMLInputElement).value };
+          }}
+        />
+        <span>${this.t("rule_occurrences")}</span>
+        <button class="btn" ?disabled=${!valid} @click=${() => this.setRule(model, category, "threshold", threshold)}>
+          ${this.t("rule_apply")}
+        </button>
+      </div>
+    </div>`;
+  }
+
+  /** Chip of the rules in force, opening the list that lets an admin show a warning again. */
+  private renderRules(model: HostModel): TemplateResult | typeof nothing {
+    const attrs = model.kernel?.entity.attributes;
+    const rules = (attrs?.rules ?? {}) as Record<string, { ignore?: boolean; threshold?: number | null }>;
+    const masked = (attrs?.masked ?? {}) as Record<string, { count: number }>;
+    const counts = (attrs?.counts ?? {}) as Record<string, number>;
+    if (!Object.keys(rules).length) return nothing;
+    const admin = this.hass?.user?.is_admin !== false;
+    return html`
+      <button class="chip plain" @click=${() => (this.showRules = !this.showRules)}>
+        <ha-icon icon="mdi:eye-off-outline"></ha-icon>${this.t("masked_count", { count: Object.keys(masked).length })}
+      </button>
+      ${this.showRules
+        ? html`<div class="rules">
+            <div class="secondary">${this.t("kernel_rules")}</div>
+            ${Object.entries(rules).map(
+              ([category, rule]) => html`<div class="rule-row">
+                <b>${category}</b>
+                <span class="secondary">
+                  ${rule.ignore
+                    ? this.t("masked_ignore")
+                    : this.t("masked_threshold", {
+                        threshold: rule.threshold ?? 0,
+                        count: masked[category]?.count ?? counts[category] ?? 0,
+                      })}
+                </span>
+                ${admin
+                  ? html`<button class="btn" @click=${() => this.setRule(model, category, "remove")}>
+                      ${this.t("rule_remove")}
+                    </button>`
+                  : nothing}
+              </div>`,
+            )}
+          </div>`
+        : nothing}
     `;
   }
 
@@ -226,6 +438,7 @@ export class HostAgentCard extends LitElement {
               ? this.t("kernel_errors", { count: errors, hours: s.entity.attributes.window_hours ?? 24 })
               : this.t("kernel_ok");
           })}
+          ${this.renderRules(model)}
         </div>
       </div>
     `;
@@ -336,7 +549,47 @@ export class HostAgentCard extends LitElement {
     `;
   }
 
-  private renderDisks(disks: Subject[]): TemplateResult {
+  private renderSelfTest(disk: Subject, offline: boolean): TemplateResult | typeof nothing {
+    // The agent publishes one button per kind of test and per disk; the card only links to them
+    if ((!disk.metric("selftest_short", "button") && !disk.metric("selftest_long", "button")) || disk.missing) {
+      return nothing;
+    }
+    return html`<button
+      class="icon-button"
+      title=${this.t("selftest_start")}
+      ?disabled=${offline || Boolean(disk.entity.attributes.selftest_in_progress)}
+      @click=${(ev: Event) => {
+        ev.stopPropagation();
+        this.disarm();
+        this.diskMenu = this.diskMenu === disk.objectId ? undefined : disk.objectId;
+      }}
+    >
+      <ha-icon icon="mdi:clipboard-pulse-outline"></ha-icon>
+    </button>`;
+  }
+
+  private renderDiskMenu(disk: Subject): TemplateResult | typeof nothing {
+    if (this.diskMenu !== disk.objectId) return nothing;
+    const short = disk.metric("selftest_short", "button");
+    const long = disk.metric("selftest_long", "button");
+    const key = `${disk.objectId}:long`;
+    const start = async (entity: HassEntity) => {
+      await this.press(entity);
+      this.diskMenu = undefined;
+      this.disarm();
+    };
+    return html`<div class="disk-menu">
+      ${short ? html`<button class="btn" @click=${() => start(short)}>${this.t("selftest_short")}</button>` : nothing}
+      ${long
+        ? this.confirming === key
+          ? html`<button class="btn danger" @click=${() => start(long)}>${this.t("selftest_long_confirm")}</button>
+              <button class="btn" @click=${() => this.disarm()}>${this.t("cancel")}</button>`
+          : html`<button class="btn" @click=${() => this.arm(key)}>${this.t("selftest_long")}</button>`
+        : nothing}
+    </div>`;
+  }
+
+  private renderDisks(disks: Subject[], offline: boolean): TemplateResult {
     return html`
       <div class="section">
         ${this.sectionTitle("disks", "mdi:harddisk")}
@@ -345,6 +598,7 @@ export class HostAgentCard extends LitElement {
           const temp = numberState(disk.metric("temperature"));
           const ageHours = numberState(disk.metric("selftest_age"));
           const details = [
+            attrs.selftest_in_progress ? this.t("selftest_running") : undefined,
             attrs.device,
             attrs.capacity_bytes ? formatBytes(this.hass, attrs.capacity_bytes) : undefined,
             attrs.power_on_hours
@@ -365,8 +619,9 @@ export class HostAgentCard extends LitElement {
               </div>
               ${temp !== undefined ? html`<div class="value">${temp} °C</div>` : nothing}
               ${attrs.selftest_in_progress ? html`<ha-icon class="spin" icon="mdi:progress-clock"></ha-icon>` : nothing}
+              ${this.renderSelfTest(disk, offline)}
             </div>
-            ${this.renderSubjectIssues(disk)}
+            ${this.renderDiskMenu(disk)} ${this.renderSubjectIssues(disk)}
           `;
         })}
       </div>
@@ -530,6 +785,53 @@ export class HostAgentCard extends LitElement {
     .status.warning { background: var(--warn); }
     .status.critical { background: var(--crit); }
     .status.offline, .status.unknown { background: var(--unk); color: var(--primary-text-color); }
+    .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 2px; }
+    /* Collapsed: the header takes the colour of the worst problem */
+    ha-card.collapsed.sev-ok .header { background: color-mix(in srgb, var(--ok) 12%, transparent); }
+    ha-card.collapsed.sev-warning .header { background: color-mix(in srgb, var(--warn) 16%, transparent); }
+    ha-card.collapsed.sev-critical .header { background: color-mix(in srgb, var(--crit) 16%, transparent); }
+    ha-card.collapsed.sev-unknown .header { background: color-mix(in srgb, var(--unk) 18%, transparent); }
+    ha-card.collapsed .header { padding-bottom: 12px; }
+    ha-card.collapsed .issues { padding-top: 8px; }
+    .icon-button.small { padding: 2px; margin-left: auto; --mdc-icon-size: 18px; }
+    .icon-button.wake { color: var(--ok); }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      border-radius: 16px;
+      font-size: 0.85em;
+      border: 1px solid var(--divider-color);
+      --mdc-icon-size: 16px;
+    }
+    .btn:hover { background: var(--secondary-background-color); }
+    .btn[disabled] { opacity: 0.4; cursor: default; }
+    .btn.danger { border-color: var(--crit); color: var(--crit); }
+    .confirm { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85em; }
+    .issue span { flex: 1; }
+    .rule-editor, .disk-menu, .rules {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      font-size: 0.85em;
+    }
+    .disk-menu { padding-left: 36px; }
+    .rules { flex-direction: column; align-items: stretch; }
+    .rule-row { display: flex; align-items: center; gap: 8px; }
+    .rule-row .secondary { flex: 1; }
+    .threshold { display: inline-flex; align-items: center; gap: 6px; }
+    .threshold input {
+      width: 4.5em;
+      font: inherit;
+      color: inherit;
+      background: var(--card-background-color);
+      border: 1px solid var(--divider-color);
+      border-radius: 6px;
+      padding: 2px 6px;
+    }
     .icon-button { padding: 4px; border-radius: 50%; color: var(--secondary-text-color); }
     .icon-button:hover { background: var(--secondary-background-color); }
     .icon-button[disabled] { opacity: 0.4; cursor: default; }

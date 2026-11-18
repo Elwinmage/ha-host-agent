@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from host_agent.collectors.base import Collector, CommandRunner, run_command
-from host_agent.config import KernelConfig
+from host_agent.config import KERNEL_PROTECTED, KernelConfig, KernelRule
 from host_agent.i18n import Translator
 from host_agent.model import CRITICAL, WARNING, CollectorResult, EntitySpec, Issue, Reading, problem_reading
 
@@ -88,6 +88,27 @@ def classify(
 
 
 SEVERITY = {name: severity for name, severity, _ in PATTERNS} | {"custom": WARNING}
+
+
+def apply_rules(
+    counts: Counter[str], rules: dict[str, KernelRule]
+) -> tuple[Counter[str], dict[str, dict[str, Any]]]:
+    """Split the counts into what is shown and what a rule hides.
+
+    Critical categories are never hidden, whatever the configuration says.
+    """
+    visible: Counter[str] = Counter()
+    masked: dict[str, dict[str, Any]] = {}
+    for category, count in counts.items():
+        rule = rules.get(category)
+        if rule is not None and category not in KERNEL_PROTECTED and rule.hides(count):
+            masked[category] = {"count": count, "mode": "ignore" if rule.ignore else "threshold"}
+            if rule.threshold is not None:
+                masked[category]["threshold"] = rule.threshold
+        else:
+            visible[category] = count
+    return visible, masked
+
 
 # USB messages name the device by its port: "usb 2-1.4: reset SuperSpeed USB device..."
 USB_PORT = re.compile(r"\busb (\d+-[\d.]+):")
@@ -186,6 +207,7 @@ class KernelCollector(Collector):
     def collect(self) -> CollectorResult:
         lines = self.lines()
         counts, recent = classify(lines, self.extra, self.ignore, UsbFilter(lines, self.root))
+        visible, masked = apply_rules(counts, self.cfg.rules)
         issues = [
             Issue(
                 KEY,
@@ -193,13 +215,17 @@ class KernelCollector(Collector):
                 SEVERITY[category],
                 self.t(f"kernel_{category}", count=count, hours=self.cfg.window_hours),
             )
-            for category, count in sorted(counts.items())
+            for category, count in sorted(visible.items())
         ]
         common: dict[str, Any] = {"subject": KEY, "subject_label": "kernel"}
         attrs = {
             "kind": "kernel",
             "window_hours": self.cfg.window_hours,
+            # Raw counts, hidden categories included (see "masked")
             "counts": dict(counts),
+            "masked": masked,
+            "rules": {category: rule.as_dict() for category, rule in self.cfg.rules.items()},
+            "protected": list(KERNEL_PROTECTED),
             "recent": recent,
         }
         return CollectorResult(
@@ -222,6 +248,6 @@ class KernelCollector(Collector):
                     **common,
                 ),
             ],
-            readings=[problem_reading(KEY, issues, attrs), Reading(f"{KEY}_errors", sum(counts.values()))],
+            readings=[problem_reading(KEY, issues, attrs), Reading(f"{KEY}_errors", sum(visible.values()))],
             issues=issues,
         )

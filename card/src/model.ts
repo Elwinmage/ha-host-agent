@@ -26,6 +26,9 @@ export interface HostModel {
   version?: HassEntity;
   update?: HassEntity;
   refresh?: HassEntity;
+  // Created by the integration, opt-in per host (found through their node_id/action attributes)
+  reboot?: HassEntity;
+  wake?: HassEntity;
   system?: Subject;
   disks: Subject[];
   gpus: Subject[];
@@ -100,6 +103,14 @@ export function buildModel(hass: HomeAssistant, config: HostAgentCardConfig): Ho
       )
     : undefined;
   const device = config.device_id ? hass.devices?.[config.device_id] : undefined;
+  // The integration's buttons are not named after the node: look them up by attribute
+  const action = (name: string) =>
+    Object.values(hass.states).find(
+      (entity) =>
+        entity.entity_id.startsWith("button.") &&
+        entity.attributes.node_id === nodeId &&
+        entity.attributes.action === name,
+    );
   const offline = !host || UNAVAILABLE.has(host.state);
   const system = ofKind("system")[0];
 
@@ -114,6 +125,8 @@ export function buildModel(hass: HomeAssistant, config: HostAgentCardConfig): Ho
     version: find("sensor", `${nodeId}_agent_version`),
     update: deviceUpdate ? hass.states[deviceUpdate.entity_id] : undefined,
     refresh: find("button", `${nodeId}_refresh`),
+    reboot: action("reboot"),
+    wake: action("wake"),
     system,
     disks: ofKind("disk"),
     filesystems: ofKind("filesystem").sort((a, b) =>

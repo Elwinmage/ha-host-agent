@@ -120,11 +120,11 @@ Every problem entity carries a `kind` attribute (`host`, `disk`, `filesystem`, `
 | Clock | `timedatectl` | not synchronised = warning |
 | Read-only filesystem | `/proc/mounts` | critical unless listed in `readonly_ok` |
 | Inodes | `statvfs` | thresholds |
-| Kernel log | `journalctl -k` over `window_hours` | filesystem / disk I/O errors = critical; NVMe, SATA link, USB storage resets (only mass-storage devices, outside the 2 min after a resume or boot), under-voltage = warning |
+| Kernel log | `journalctl -k` over `window_hours` | filesystem / disk I/O errors = critical; NVMe, SATA link, USB storage resets (only mass-storage devices, outside the 2 min after a resume or boot), under-voltage = warning; per-category `rules` (ignore, or threshold over the window) hide warnings, filesystem / I/O are never hideable |
 | systemd | `systemctl` | failed unit = warning, watched service not active = critical |
 | RAID | `/proc/mdstat` | degraded / inactive = critical, rebuild = warning |
 | ZFS | `zpool list`, `zpool status` | not ONLINE or data errors = critical, scrub errors / scrub too old / capacity = warning |
-| Updates | `apt-get -s dist-upgrade`, `dnf check-update` | security updates pending = warning |
+| Updates | `apt-get -s dist-upgrade`, `dnf check-update` | security updates pending = warning; only installable packages are counted (packages held back by Ubuntu phased updates are ignored) |
 | Backup consistency | `rsync --stats` at the end of each dirvish image log | size or file count drop, burst of changed files vs the median of the previous images = warning |
 
 The agent account is added to the `video`, `render`, `systemd-journal` and `adm` groups (when

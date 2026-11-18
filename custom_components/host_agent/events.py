@@ -141,11 +141,15 @@ class ProblemEvents:
         self.hass.bus.async_fire(EVENT_PROBLEM, self.event_data(kind, old, new))
 
     def event_data(self, kind: str, old: State, new: State) -> dict[str, Any]:
+        runtime = getattr(self.entry, "runtime_data", None)
         return {
             "entity_id": new.entity_id,
             "transition": kind,
             "host": self.entry.data.get(CONF_DEVICE_NAME) or self.entry.title,
             "node_id": self.node_id,
+            # A reboot asked from Home Assistant explains the host going offline and coming back:
+            # the blueprint does not alert on these
+            "planned": bool(runtime and runtime.reboot_planned),
             # True for the host's own problem sensor (all its issues), False for a
             # disk, filesystem, vault... sensor
             "host_sensor": new.entity_id in self.host_sensors,

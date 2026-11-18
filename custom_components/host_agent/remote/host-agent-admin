@@ -12,7 +12,8 @@
 #                               roll back automatically when the service does not stay up
 #   configure                   apply incoming/config.yaml (+ mqtt.secret), restart, roll back on failure
 #   rollback                    re-activate the previous version
-#   restart
+#   restart                     restart the agent service
+#   reboot                      reboot the host (returns first, the reboot follows a few seconds later)
 #   read-config                 print /etc/host-agent/config.yaml (no secret)
 #   uninstall [--purge]         stop and remove the agent (--purge: configuration and state too)
 set -euo pipefail
@@ -264,6 +265,13 @@ cmd_restart() {
     echo "RESTARTED"
 }
 
+# Detached and delayed so that this command (and the SSH session) ends cleanly before the
+# host goes down; the lock descriptor is not leaked to the background shell
+cmd_reboot() {
+    ( sleep 3; "${SYSTEMCTL}" reboot ) </dev/null >/dev/null 2>&1 9>&- &
+    echo "REBOOTING"
+}
+
 cmd_read_config() {
     [[ -f "${CONF_DIR}/config.yaml" ]] || die "no configuration" 66
     cat "${CONF_DIR}/config.yaml"
@@ -294,7 +302,8 @@ case "${command}" in
     configure) cmd_configure ;;
     rollback) cmd_rollback ;;
     restart) cmd_restart ;;
+    reboot) cmd_reboot ;;
     read-config) cmd_read_config ;;
     uninstall) cmd_uninstall "$@" ;;
-    *) die "usage: host-agent-admin status|install VERSION SHA256|configure|rollback|restart|read-config|uninstall [--purge]" 64 ;;
+    *) die "usage: host-agent-admin status|install VERSION SHA256|configure|rollback|restart|reboot|read-config|uninstall [--purge]" 64 ;;
 esac

@@ -24,13 +24,38 @@ class Pending:
     security: list[str] = field(default_factory=list)
 
 
+# Ubuntu phases some updates in over several days: apt lists them as upgradable but holds
+# them back ("The following upgrades have been deferred due to phasing:" + indented names)
+PHASING_HEADER = re.compile(r"due to phasing", re.I)
+
+
+def deferred_packages(text: str) -> set[str]:
+    """Names listed in the 'deferred due to phasing' block(s) of an apt simulation."""
+    names: set[str] = set()
+    in_block = False
+    for line in text.splitlines():
+        if PHASING_HEADER.search(line) and not line.startswith(" "):
+            in_block = True
+        elif in_block and line.startswith(" "):
+            names.update(line.split())
+        else:
+            in_block = False
+    return names
+
+
 def parse_apt_simulation(text: str) -> Pending:
-    """`apt-get -s dist-upgrade`: 'Inst pkg [old] (new Debian:13.1/stable-security [amd64])'."""
+    """`apt-get -s dist-upgrade`: 'Inst pkg [old] (new Debian:13.1/stable-security [amd64])'.
+
+    Only what can really be installed is counted: packages deferred by phasing are left out.
+    """
     pending = Pending("apt")
+    deferred = deferred_packages(text)
     for line in text.splitlines():
         if not line.startswith("Inst "):
             continue
         name = line.split()[1]
+        if name in deferred:
+            continue
         pending.packages.append(name)
         origin = line[line.find("(") :] if "(" in line else ""
         if re.search(r"[-/]security", origin, re.I):
@@ -69,7 +94,10 @@ class UpdatesCollector(Collector):
 
     def pending(self) -> Pending | None:
         if shutil.which("apt-get"):
-            res = self.run(["apt-get", "-s", "-o", "Debug::NoLocking=1", "dist-upgrade"], 300)
+            # LC_ALL=C: the phasing block header is parsed in its untranslated form
+            res = self.run(
+                ["env", "LC_ALL=C", "apt-get", "-s", "-o", "Debug::NoLocking=1", "dist-upgrade"], 300
+            )
             if res.returncode != 0:
                 raise RuntimeError(f"apt-get -s: {res.stderr.strip()[:200]}")
             return parse_apt_simulation(res.stdout)

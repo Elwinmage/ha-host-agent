@@ -69,6 +69,7 @@ def fake_remote() -> Generator[MagicMock]:
     mocks.configure = AsyncMock()
     mocks.rollback = AsyncMock()
     mocks.restart = AsyncMock()
+    mocks.reboot = AsyncMock()
     mocks.uninstall = AsyncMock()
     targets = [
         "preflight",
@@ -80,6 +81,7 @@ def fake_remote() -> Generator[MagicMock]:
         "configure",
         "rollback",
         "restart",
+        "reboot",
         "uninstall",
     ]
     patches = [patch(f"custom_components.host_agent.remote.{name}", getattr(mocks, name)) for name in targets]

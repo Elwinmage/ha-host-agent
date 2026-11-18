@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import time
@@ -27,21 +28,34 @@ from .const import (
     AUTO_UPDATE_DELAY,
     AUTO_UPDATE_RETRY,
     CONF_AUTO_UPDATE,
+    CONF_COLLECTORS,
     CONF_DEPLOYED_VERSION,
     CONF_HOST_KEY,
+    CONF_MAC,
+    CONF_MODEL,
     CONF_MQTT_PASSWORD,
     CONF_NODE_ID,
     CONF_PRIVATE_KEY,
+    CONF_WOL_BROADCAST,
     DEFAULT_BASE_TOPIC,
+    DEFAULT_WOL_BROADCAST,
     DOMAIN,
     HEALTH_TIMEOUT,
     ISSUE_HOST_KEY,
     ISSUE_PROTOCOL,
     PROTOCOL_VERSION,
+    REBOOT_GRACE,
+    REBOOT_RETURN_GRACE,
 )
 from .ssh import HostKeyMismatch, InvalidAuth, SshClient, SshError
+from .wol import send_magic_packet
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def wake_supported(data: dict[str, Any]) -> bool:
+    """Wake-on-LAN needs the MAC address; a Raspberry Pi cannot be woken up this way."""
+    return bool(data.get(CONF_MAC)) and "raspberry pi" not in str(data.get(CONF_MODEL) or "").lower()
 
 
 def is_newer(candidate: str, installed: str | None) -> bool:
@@ -74,6 +88,8 @@ class HostAgentRuntime:
         self._version_waiters: list[tuple[str, asyncio.Future[None]]] = []
         self._last_auto_attempt: float | None = None
         self._auto_timer: CALLBACK_TYPE | None = None
+        # monotonic time until which a reboot asked from Home Assistant counts as planned
+        self._reboot_deadline: float | None = None
 
     # ------------------------------------------------------------------ #
     # Properties
@@ -94,6 +110,11 @@ class HostAgentRuntime:
     @property
     def update_available(self) -> bool:
         return is_newer(self.bundle.version, self.installed_version)
+
+    @property
+    def reboot_planned(self) -> bool:
+        """A reboot was requested from Home Assistant: the host being offline is expected."""
+        return self._reboot_deadline is not None and time.monotonic() < self._reboot_deadline
 
     def ssh(self) -> SshClient:
         return SshClient(
@@ -136,7 +157,11 @@ class HostAgentRuntime:
 
     @callback
     def _on_availability(self, msg: mqtt.ReceiveMessage) -> None:
+        was_online = self.agent.online
         self.agent.online = msg.payload == "online"
+        if self.agent.online and was_online is False and self._reboot_deadline is not None:
+            # Back after the reboot: the "back online" event is still planned, then the flag lapses
+            self._reboot_deadline = min(self._reboot_deadline, time.monotonic() + REBOOT_RETURN_GRACE)
         self._notify()
         self._resolve_waiters()
 
@@ -275,6 +300,57 @@ class HostAgentRuntime:
                 raise self._handle_ssh_error(err) from err
             except remote.RemoteError as err:
                 raise HomeAssistantError(f"{self.entry.title}: {err}") from err
+
+    async def async_reboot(self) -> None:
+        """Reboot the host through the restricted helper."""
+        async with self._lock:
+            try:
+                async with self.ssh() as ssh:
+                    await remote.reboot(ssh)
+            except SshError as err:
+                raise self._handle_ssh_error(err) from err
+            except remote.RemoteError as err:
+                if "usage:" in str(err):
+                    # Hosts prepared by an older version only know the previous commands
+                    raise HomeAssistantError(
+                        f"{self.entry.title}: the helper on the host is outdated, "
+                        "re-authenticate the integration to update it"
+                    ) from err
+                raise HomeAssistantError(f"{self.entry.title}: {err}") from err
+        self._reboot_deadline = time.monotonic() + REBOOT_GRACE
+        self._notify()
+
+    async def async_wake(self) -> None:
+        """Send a Wake-on-LAN magic packet from Home Assistant."""
+        mac = self.entry.data.get(CONF_MAC)
+        if not wake_supported(dict(self.entry.data)) or not mac:
+            raise HomeAssistantError(f"{self.entry.title}: Wake-on-LAN is not available for this host")
+        broadcast = self.entry.options.get(CONF_WOL_BROADCAST) or DEFAULT_WOL_BROADCAST
+        try:
+            await self.hass.async_add_executor_job(send_magic_packet, mac, broadcast)
+        except (OSError, ValueError) as err:
+            raise HomeAssistantError(f"{self.entry.title}: cannot send the magic packet: {err}") from err
+
+    async def async_set_kernel_rule(self, category: str, rule: dict[str, Any] | None) -> None:
+        """Add, change (rule) or remove (None) the rule of a kernel message category, then push it."""
+        options = dict(self.entry.options)
+        collectors = copy.deepcopy(options.get(CONF_COLLECTORS) or {})
+        kernel = collectors.setdefault("kernel", {})
+        rules = dict(kernel.get("rules") or {})
+        if rule is None:
+            rules.pop(category, None)
+        else:
+            rules[category] = rule
+        if rules:
+            kernel["rules"] = rules
+        else:
+            kernel.pop("rules", None)
+        options[CONF_COLLECTORS] = collectors
+        try:
+            await self.async_configure(options)
+        except remote.RemoteError as err:
+            raise HomeAssistantError(f"{self.entry.title}: the agent refused the rule: {err}") from err
+        self.hass.config_entries.async_update_entry(self.entry, options=options)
 
     async def async_uninstall(self, purge: bool = True) -> None:
         async with self.ssh() as ssh:

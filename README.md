@@ -81,7 +81,7 @@ option is enabled). An update:
 
 | Menu | Settings |
 |---|---|
-| General | language, automatic agent updates |
+| General | language, automatic agent updates, *reboot button* (opt-in), *Wake-on-LAN* when offline (opt-in, optional broadcast address; not offered for Raspberry Pi) |
 | Disks | SMART reading interval, temperature thresholds, self-test schedule (short / long / time window), ignored disks |
 | Filesystems | mountpoints that must be mounted, mountpoints to watch, used space thresholds |
 | dirvish backups | banks (default: `master.conf`), ignored vaults, maximum age, timeline length, rsync 24 handling |
@@ -92,6 +92,7 @@ option is enabled). An update:
 | systemd services | services that must run, failed units to ignore |
 | Package updates | check interval, security updates as a warning |
 | Kernel log | window, extra patterns, messages to ignore |
+| Kernel rules | remove the per-category rules created from the card (ignore / threshold) |
 | Advanced | the whole `collectors` section in YAML ([`config.example.yaml`](agent/packaging/config.example.yaml) syntax) |
 
 Every change is sent to the host and validated by the agent itself before being saved; a
@@ -109,7 +110,22 @@ device_id: 0123abcd...      # the host device (visual editor)
 title: Serveur de sauvegarde  # default: device name
 days: 14                    # backup timeline length
 show: [issues, system, disks, filesystems, storage, gpus, vaults, jobs]   # default: all
+default_state: expanded     # expanded | collapsed at load (the chevron toggles, not persisted)
+auto_expand_critical: false # unfold automatically when a critical issue appears
+show_restart: true          # reboot button (needs the integration's reboot option)
 ```
+
+- collapsed view: coloured header (green / orange / red) and only the alarms;
+- reboot button (confirmation): runs `host-agent-admin reboot`; the offline alert is muted
+  during a planned reboot (`planned` in the blueprint event data). Hosts installed before
+  this version must be re-authenticated once to get the updated helper;
+- Wake-on-LAN button when the host is offline: magic packet sent from this Home Assistant
+  only (same LAN; it cannot cross a VPN);
+- disks: self-test icon linking to the short / long test buttons (long test asks for
+  confirmation);
+- kernel warnings (admin users): ignore a category or set a threshold per host from the
+  issue; rules are listed in the card and in the options, and can be removed at any time
+  (service `host_agent.set_kernel_rule`).
 
 - header: overall status, agent version, last update, pending agent update, refresh button;
 - current issues with their message;

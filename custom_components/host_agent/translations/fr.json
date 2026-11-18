@@ -91,7 +91,8 @@
           "services": "Services systemd",
           "updates": "Mises à jour des paquets",
           "kernel": "Journal du noyau",
-          "advanced": "Avancé (YAML)"
+          "advanced": "Avancé (YAML)",
+          "kernel_rules": "Règles du journal du noyau (avertissements masqués)"
         }
       },
       "general": {
@@ -99,7 +100,15 @@
         "description": "{detail}",
         "data": {
           "auto_update": "Mettre à jour l'agent automatiquement",
-          "language": "Langue des entités et des messages"
+          "language": "Langue des entités et des messages",
+          "allow_reboot": "Autoriser le redémarrage de l'hôte depuis Home Assistant",
+          "wake_on_lan": "Wake-on-LAN (réveiller l'hôte quand il est hors ligne)",
+          "wol_broadcast": "Adresse de broadcast Wake-on-LAN"
+        },
+        "data_description": {
+          "allow_reboot": "Crée un bouton « Redémarrer l'hôte ». Toute personne pouvant appuyer sur des boutons pourra alors redémarrer cet hôte.",
+          "wake_on_lan": "Nécessite le Wake-on-LAN activé dans le BIOS/firmware de l'hôte. Le paquet part de Home Assistant : l'hôte doit être sur le même segment réseau (il ne traverse pas un VPN).",
+          "wol_broadcast": "Vide = 255.255.255.255. Utilisez l'adresse de broadcast du sous-réseau (ex. 192.168.1.255) si le paquet n'atteint pas l'hôte."
         }
       },
       "smart": {
@@ -268,6 +277,13 @@
           "patterns": "Motifs supplémentaires comptés comme erreurs (regex)",
           "ignore": "Messages à ignorer (regex)"
         }
+      },
+      "kernel_rules": {
+        "title": "Règles du journal du noyau",
+        "description": "Règles créées depuis la carte. Sélectionnez celles à supprimer : leurs avertissements s'afficheront de nouveau. {detail}",
+        "data": {
+          "remove": "Règles à supprimer"
+        }
       }
     },
     "error": {
@@ -278,7 +294,8 @@
       "invalid_window": "Format attendu : HH:MM-HH:MM.",
       "duplicate_job": "Une tâche porte déjà ce nom.",
       "required": "Obligatoire.",
-      "invalid_regex": "Expression régulière invalide."
+      "invalid_regex": "Expression régulière invalide.",
+      "invalid_broadcast": "Adresse IPv4 attendue."
     }
   },
   "entity": {
@@ -290,6 +307,12 @@
     "button": {
       "restart_agent": {
         "name": "Redémarrer l'agent"
+      },
+      "reboot_host": {
+        "name": "Redémarrer l'hôte"
+      },
+      "wake_host": {
+        "name": "Réveiller l'hôte"
       }
     }
   },
@@ -308,6 +331,46 @@
       "options": {
         "path": "Fichier",
         "report": "Rapport (host-agent report)"
+      }
+    },
+    "kernel_category": {
+      "options": {
+        "nvme": "Timeouts / réinitialisations NVMe",
+        "ata": "Erreurs de lien SATA",
+        "usb": "Réinitialisations de stockage USB",
+        "power": "Sous-tension",
+        "custom": "Motifs personnalisés"
+      }
+    },
+    "kernel_rule_mode": {
+      "options": {
+        "ignore": "Masquer",
+        "threshold": "Afficher seulement au-delà d'un seuil",
+        "remove": "Supprimer la règle"
+      }
+    }
+  },
+  "services": {
+    "set_kernel_rule": {
+      "name": "Définir une règle du journal du noyau",
+      "description": "Masque les avertissements d'une catégorie de messages du noyau sur un hôte, ou ne les affiche qu'au-delà d'un nombre d'occurrences sur la fenêtre. Les catégories critiques (système de fichiers, E/S) ne peuvent pas être masquées.",
+      "fields": {
+        "node_id": {
+          "name": "Identifiant de nœud",
+          "description": "Identifiant de nœud de l'hôte (celui des entités de l'agent)."
+        },
+        "category": {
+          "name": "Catégorie",
+          "description": "Type de message du noyau."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Masquer l'avertissement, ne l'afficher qu'au-dessus d'un seuil, ou supprimer la règle."
+        },
+        "threshold": {
+          "name": "Seuil",
+          "description": "L'avertissement n'est affiché que s'il y a plus d'occurrences que cette valeur sur la fenêtre."
+        }
       }
     }
   }

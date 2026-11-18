@@ -91,7 +91,8 @@
           "services": "systemd services",
           "updates": "Package updates",
           "kernel": "Kernel log",
-          "advanced": "Advanced (YAML)"
+          "advanced": "Advanced (YAML)",
+          "kernel_rules": "Kernel log rules (hidden warnings)"
         }
       },
       "general": {
@@ -99,7 +100,15 @@
         "description": "{detail}",
         "data": {
           "auto_update": "Update the agent automatically",
-          "language": "Language of entity names and messages"
+          "language": "Language of entity names and messages",
+          "allow_reboot": "Allow rebooting the host from Home Assistant",
+          "wake_on_lan": "Wake-on-LAN (wake the host when it is offline)",
+          "wol_broadcast": "Wake-on-LAN broadcast address"
+        },
+        "data_description": {
+          "allow_reboot": "Creates a \"Reboot host\" button. Anyone allowed to press buttons can then reboot this host.",
+          "wake_on_lan": "Needs Wake-on-LAN enabled in the host's BIOS/firmware. The packet is sent from Home Assistant, so the host must be on the same network segment (it does not cross a VPN).",
+          "wol_broadcast": "Empty = 255.255.255.255. Use the subnet broadcast address (e.g. 192.168.1.255) if the packet does not reach the host."
         }
       },
       "smart": {
@@ -268,6 +277,13 @@
           "patterns": "Extra patterns counted as errors (regex)",
           "ignore": "Messages to ignore (regex)"
         }
+      },
+      "kernel_rules": {
+        "title": "Kernel log rules",
+        "description": "Rules created from the card. Select the ones to remove: their warnings will be shown again. {detail}",
+        "data": {
+          "remove": "Rules to remove"
+        }
       }
     },
     "error": {
@@ -278,7 +294,8 @@
       "invalid_window": "Expected HH:MM-HH:MM.",
       "duplicate_job": "A job with this name already exists.",
       "required": "Required.",
-      "invalid_regex": "Invalid regular expression."
+      "invalid_regex": "Invalid regular expression.",
+      "invalid_broadcast": "Expected an IPv4 address."
     }
   },
   "entity": {
@@ -290,6 +307,12 @@
     "button": {
       "restart_agent": {
         "name": "Restart agent"
+      },
+      "reboot_host": {
+        "name": "Reboot host"
+      },
+      "wake_host": {
+        "name": "Wake host"
       }
     }
   },
@@ -308,6 +331,46 @@
       "options": {
         "path": "File",
         "report": "Report (host-agent report)"
+      }
+    },
+    "kernel_category": {
+      "options": {
+        "nvme": "NVMe timeouts / resets",
+        "ata": "SATA link errors",
+        "usb": "USB storage resets",
+        "power": "Under-voltage",
+        "custom": "Custom patterns"
+      }
+    },
+    "kernel_rule_mode": {
+      "options": {
+        "ignore": "Hide",
+        "threshold": "Show only above a threshold",
+        "remove": "Remove the rule"
+      }
+    }
+  },
+  "services": {
+    "set_kernel_rule": {
+      "name": "Set a kernel log rule",
+      "description": "Hide the warnings of a kernel message category on a host, or show them only above a number of occurrences over the window. Critical categories (filesystem, I/O) cannot be hidden.",
+      "fields": {
+        "node_id": {
+          "name": "Node id",
+          "description": "Node id of the host (as in the entity ids of the agent)."
+        },
+        "category": {
+          "name": "Category",
+          "description": "Kind of kernel message."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Hide the warning, show it only above a threshold, or remove the rule."
+        },
+        "threshold": {
+          "name": "Threshold",
+          "description": "The warning is shown only when there are more occurrences than this over the window."
+        }
       }
     }
   }

@@ -137,6 +137,8 @@ variables:
   entity_name: "{{ data.name }}"
   host: "{{ data.host }}"
   elapsed_s: "{{ data.elapsed | int(0) }}"
+  # A reboot asked from Home Assistant (reboot button): no outage alert for it
+  planned: "{{ data.planned | default(false) }}"
   delay_s: >-
     {%- set d = delay_input -%}
     {{- (d.days | default(0)) * 86400 + (d.hours | default(0)) * 3600
@@ -163,8 +165,8 @@ conditions:
       {%- elif event == 'resolved' -%}
         {#- a problem shorter than the delay was never notified -#}
         {{- notify_resolved and old_issues | count > 0 and elapsed_s | int >= delay_s | int -}}
-      {%- elif event == 'offline' -%}{{ notify_offline }}
-      {%- elif event == 'online' -%}{{ notify_offline and elapsed_s | int >= offline_s | int }}
+      {%- elif event == 'offline' -%}{{ notify_offline and not planned }}
+      {%- elif event == 'online' -%}{{ notify_offline and not planned and elapsed_s | int >= offline_s | int }}
       {%- else -%}false{%- endif -%}
 
 actions:

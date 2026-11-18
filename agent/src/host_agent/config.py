@@ -279,6 +279,30 @@ class UpdatesConfig:
     security_is_warning: bool = True
 
 
+# Kernel message categories that are critical: never hidden by a rule
+KERNEL_PROTECTED = ("filesystem", "io")
+# Categories a rule may hide or give a threshold
+KERNEL_RULE_CATEGORIES = ("nvme", "ata", "usb", "power", "custom")
+
+
+@dataclass
+class KernelRule:
+    """What to do with the warnings of one kernel message category."""
+
+    # Never show the warning
+    ignore: bool = False
+    # Show the warning only above this many occurrences over the window (None = always)
+    threshold: int | None = None
+
+    def hides(self, count: int) -> bool:
+        if self.ignore:
+            return True
+        return self.threshold is not None and count <= self.threshold
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"ignore": self.ignore, "threshold": self.threshold}
+
+
 @dataclass
 class KernelConfig:
     """Storage / filesystem errors in the kernel log over a sliding window."""
@@ -290,6 +314,8 @@ class KernelConfig:
     # Extra regexes counted as errors
     patterns: list[str] = field(default_factory=list)
     ignore: list[str] = field(default_factory=list)
+    # Per category: hide the warning, or show it only above a number of occurrences
+    rules: dict[str, KernelRule] = field(default_factory=dict)
 
 
 @dataclass
@@ -578,6 +604,28 @@ def _parse_system(data: Any) -> SystemConfig:
     )
 
 
+def _kernel_rules(data: Any, path: str) -> dict[str, KernelRule]:
+    rules: dict[str, KernelRule] = {}
+    for category, raw in _section(data, path).items():
+        where = f"{path}.{category}"
+        if category in KERNEL_PROTECTED:
+            raise ConfigError(f"'{where}': critical messages cannot be hidden")
+        if category not in KERNEL_RULE_CATEGORIES:
+            raise ConfigError(f"'{where}': unknown category (expected {', '.join(KERNEL_RULE_CATEGORIES)})")
+        item = _section(raw, where)
+        _check_keys(item, {"ignore", "threshold"}, where)
+        rule = KernelRule(
+            ignore=_typed(item, "ignore", bool, False, where),
+            threshold=_typed(item, "threshold", int, None, where),
+        )
+        if rule.threshold is not None and rule.threshold < 0:
+            raise ConfigError(f"'{where}.threshold' must be 0 or more")
+        if not rule.ignore and rule.threshold is None:
+            raise ConfigError(f"'{where}': set 'ignore: true' or a 'threshold'")
+        rules[category] = rule
+    return rules
+
+
 T = TypeVar("T")
 
 
@@ -595,6 +643,8 @@ def _parse_simple(cls: type[T], data: Any, path: str, min_interval: int) -> T:
             values[name] = _thresholds(section.get(name), current, f"{path}.{name}")
         elif kind == list[str]:
             values[name] = _str_list(section, name, current, path)
+        elif kind == dict[str, KernelRule]:
+            values[name] = _kernel_rules(section.get(name), f"{path}.{name}")
         elif kind is float:
             values[name] = float(_typed(section, name, (int, float), current, path))
         else:

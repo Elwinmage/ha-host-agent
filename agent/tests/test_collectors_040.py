@@ -6,6 +6,7 @@ from __future__ import annotations
 import gzip
 import io
 import os
+from collections import Counter
 from datetime import datetime, timedelta
 
 import pytest
@@ -257,6 +258,32 @@ def test_apt(t_en, monkeypatch):
     assert codes(r["updates"]) == {("security_updates", "warning")}
 
 
+APT_PHASED = """Reading package lists...
+The following upgrades have been deferred due to phasing:
+  libfoo1 libfoo-dev
+  python3-bar
+The following packages have been kept back:
+  linux-generic
+Inst libssl3 [3.0.13-0ubuntu3.4] (3.0.13-0ubuntu3.5 Ubuntu:24.04/noble-security [amd64])
+Inst libfoo1 [1.0-1] (1.0-2 Ubuntu:24.04/noble-updates [amd64])
+Inst curl [8.5.0-2ubuntu10.5] (8.5.0-2ubuntu10.6 Ubuntu:24.04/noble-updates [amd64])
+Inst python3-bar [2.0-1] (2.0-2 Ubuntu:24.04/noble-updates [amd64])
+"""
+
+
+def test_apt_phased_updates_are_not_counted(t_en, monkeypatch):
+    pending = parse_apt_simulation(APT_PHASED)
+    # libfoo1 and python3-bar are deferred: only what apt can really install is counted
+    assert pending.packages == ["libssl3", "curl"]
+    assert pending.security == ["libssl3"]
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/apt-get" if name == "apt-get" else None)
+    run = FakeRun({"apt-get": CommandResult(0, APT_PHASED, "")})
+    r = readings(UpdatesCollector(UpdatesConfig(), t_en, runner=run).collect())
+    assert r["updates_pending"].state == 2
+    # the simulation is parsed in its untranslated form
+    assert run.calls[0][:3] == ["env", "LC_ALL=C", "apt-get"]
+
+
 def test_dnf():
     check = "\nkernel.x86_64    6.11.4-301.fc41    updates\nopenssl-libs.x86_64  1:3.2.2-9.fc41  updates\n"
     sec = "FEDORA-2026-1 Important/Sec. openssl-libs-1:3.2.2-9.fc41.x86_64\n"
@@ -291,6 +318,64 @@ def test_kernel(t_en):
     assert ("kernel_filesystem", "critical") in codes(r["kernel"])
     assert ("kernel_usb", "warning") in codes(r["kernel"])
     assert "-6h" in run.calls[0]
+
+
+def kernel_readings(t_en, rules):
+    run = FakeRun({"journalctl": CommandResult(0, JOURNAL, "")})
+    cfg = parse_config({"collectors": {"kernel": {"rules": rules}}}).kernel
+    return readings(KernelCollector(cfg, t_en, runner=run).collect())
+
+
+def test_kernel_rule_ignore(t_en):
+    r = kernel_readings(t_en, {"usb": {"ignore": True}, "power": {"ignore": True}})
+    assert codes(r["kernel"]) == {("kernel_filesystem", "critical"), ("kernel_io", "critical")}
+    assert r["kernel_errors"].state == 2
+    # the raw counts stay visible, with the reason they are hidden
+    assert r["kernel"].attrs["counts"]["usb"] == 2
+    assert r["kernel"].attrs["masked"] == {
+        "usb": {"count": 2, "mode": "ignore"},
+        "power": {"count": 1, "mode": "ignore"},
+    }
+    assert r["kernel"].attrs["rules"]["usb"] == {"ignore": True, "threshold": None}
+    assert r["kernel"].attrs["protected"] == ["filesystem", "io"]
+
+
+def test_kernel_rule_threshold(t_en):
+    # two USB messages in the journal: hidden up to 2 included, shown above
+    hidden = kernel_readings(t_en, {"usb": {"threshold": 2}})
+    assert ("kernel_usb", "warning") not in codes(hidden["kernel"])
+    assert hidden["kernel"].attrs["masked"]["usb"] == {"count": 2, "mode": "threshold", "threshold": 2}
+    shown = kernel_readings(t_en, {"usb": {"threshold": 1}})
+    assert ("kernel_usb", "warning") in codes(shown["kernel"])
+    assert "usb" not in shown["kernel"].attrs["masked"]
+
+
+def test_kernel_rules_never_hide_critical_categories(t_en):
+    from host_agent.collectors.kernel import apply_rules
+    from host_agent.config import KernelRule
+
+    visible, masked = apply_rules(
+        Counter({"io": 3, "usb": 2}), {"io": KernelRule(ignore=True), "usb": KernelRule(threshold=5)}
+    )
+    assert visible == {"io": 3} and list(masked) == ["usb"]
+
+
+def test_kernel_rules_config():
+    cfg = parse_config(
+        {"collectors": {"kernel": {"rules": {"usb": {"threshold": 4}, "ata": {"ignore": True}}}}}
+    ).kernel
+    assert cfg.rules["usb"].threshold == 4 and cfg.rules["usb"].hides(4) and not cfg.rules["usb"].hides(5)
+    assert cfg.rules["ata"].ignore
+    for bad in (
+        {"filesystem": {"ignore": True}},  # critical: protected
+        {"io": {"threshold": 3}},
+        {"bogus": {"ignore": True}},
+        {"usb": {}},  # neither ignore nor threshold
+        {"usb": {"threshold": -1}},
+        {"usb": {"ignore": True, "other": 1}},
+    ):
+        with pytest.raises(ValueError):
+            parse_config({"collectors": {"kernel": {"rules": bad}}})
 
 
 USB_JOURNAL = """2026-11-12T08:00:00+0100 pc kernel: Linux version 6.17.0-6-generic (buildd@lcy02)

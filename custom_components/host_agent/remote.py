@@ -26,6 +26,7 @@ echo "sudo=$(command -v sudo >/dev/null && echo yes || echo no)"
 echo "installed=$(basename "$(readlink /opt/host-agent/current 2>/dev/null)" 2>/dev/null)"
 echo "managed=$( [ -x /usr/local/lib/host-agent/host-agent-admin ] && echo yes || echo no)"
 echo "os=$(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME")"
+echo "model=$(cat /proc/device-tree/model 2>/dev/null | tr -d '\0')"
 """
 
 
@@ -47,6 +48,12 @@ class SystemInfo:
     installed: str | None
     managed: bool
     os: str
+    # Hardware model from the device tree (Raspberry Pi...), empty on a PC
+    model: str = ""
+
+    @property
+    def is_raspberry_pi(self) -> bool:
+        return "raspberry pi" in self.model.lower()
 
     @property
     def python_ok(self) -> bool:
@@ -81,6 +88,7 @@ async def preflight(ssh: SshClient) -> SystemInfo:
         installed=kv.get("installed") or None,
         managed=kv.get("managed") == "yes",
         os=kv.get("os", ""),
+        model=kv.get("model", ""),
     )
 
 
@@ -186,6 +194,12 @@ async def rollback(ssh: SshClient) -> None:
 
 async def restart(ssh: SshClient) -> None:
     await helper(ssh, "restart", timeout=120)
+
+
+async def reboot(ssh: SshClient) -> None:
+    output = await helper(ssh, "reboot", timeout=30)
+    if "REBOOTING" not in output:
+        raise RemoteError("unexpected helper output")
 
 
 async def uninstall(ssh: SshClient, purge: bool) -> None:

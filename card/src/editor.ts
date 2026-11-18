@@ -16,9 +16,13 @@ export class HostAgentCardEditor extends LitElement {
 
   private schema() {
     const options = SECTIONS.map((section) => ({ value: section, label: localize(this.hass, section as StringKey) }));
+    const states = ["expanded", "collapsed"].map((value) => ({ value, label: localize(this.hass, value as StringKey) }));
     return [
       { name: "device_id", selector: { device: { filter: [{ integration: "host_agent" }] } } },
       { name: "title", selector: { text: {} } },
+      { name: "default_state", selector: { select: { mode: "dropdown", options: states } } },
+      { name: "auto_expand_critical", selector: { boolean: {} } },
+      { name: "show_restart", selector: { boolean: {} } },
       { name: "days", selector: { number: { min: 3, max: 60, mode: "box" } } },
       { name: "show", selector: { select: { multiple: true, mode: "list", options } } },
       { name: "node_id", selector: { text: {} } },
@@ -41,7 +45,7 @@ export class HostAgentCardEditor extends LitElement {
     if (!this.hass || !this.config) return html``;
     return html`<ha-form
       .hass=${this.hass}
-      .data=${this.config}
+      .data=${{ default_state: "expanded", auto_expand_critical: false, show_restart: true, ...this.config }}
       .schema=${this.schema()}
       .computeLabel=${this.computeLabel}
       @value-changed=${this.changed}

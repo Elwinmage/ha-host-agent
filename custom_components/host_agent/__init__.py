@@ -7,17 +7,31 @@ import logging
 from pathlib import Path
 
 from homeassistant.components import mqtt
-from homeassistant.config_entries import ConfigEntry
+
+try:
+    # Home Assistant 2026.10+ validates schemas with probatio (voluptuous-compatible)
+    import probatio as vol
+except ImportError:  # older Home Assistant
+    import voluptuous as vol  # type: ignore[no-redef,unused-ignore]
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
 
 from . import remote
 from .bundle import BundleError, load_bundle
-from .const import CONF_NODE_ID, DEFAULT_DISCOVERY_PREFIX, DOMAIN
+from .const import (
+    CONF_NODE_ID,
+    DEFAULT_DISCOVERY_PREFIX,
+    DOMAIN,
+    KERNEL_RULE_CATEGORIES,
+    KERNEL_RULE_MODES,
+    SERVICE_SET_KERNEL_RULE,
+)
 from .events import ProblemEvents
 from .runtime import HostAgentRuntime
 from .ssh import SshError
@@ -33,8 +47,51 @@ CARD_FILE = Path(__file__).parent / "frontend" / "host-agent-card.js"
 CARD_URL = f"/{DOMAIN}/frontend/host-agent-card.js"
 
 
+SET_KERNEL_RULE_SCHEMA = vol.Schema(
+    {
+        vol.Required("node_id"): cv.string,
+        vol.Required("category"): vol.In(KERNEL_RULE_CATEGORIES),
+        vol.Required("mode"): vol.In(KERNEL_RULE_MODES),
+        vol.Optional("threshold"): cv.positive_int,
+    }
+)
+
+
+async def _async_set_kernel_rule(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Hide the warnings of a kernel message category on a host, or give them a threshold."""
+    node_id = call.data["node_id"]
+    entry = next(
+        (
+            e
+            for e in hass.config_entries.async_entries(DOMAIN)
+            if e.data.get(CONF_NODE_ID) == node_id and e.state is ConfigEntryState.LOADED
+        ),
+        None,
+    )
+    if entry is None:
+        raise ServiceValidationError(f"No loaded Host Agent host with node id '{node_id}'")
+    mode = call.data["mode"]
+    rule: dict[str, object] | None
+    if mode == "ignore":
+        rule = {"ignore": True}
+    elif mode == "threshold":
+        if "threshold" not in call.data:
+            raise ServiceValidationError("'threshold' is required with the 'threshold' mode")
+        rule = {"threshold": call.data["threshold"]}
+    else:
+        rule = None
+    await entry.runtime_data.async_set_kernel_rule(call.data["category"], rule)
+
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Serve the Lovelace card and load it in every frontend session (no resource to declare)."""
+
+    async def set_kernel_rule(call: ServiceCall) -> None:
+        await _async_set_kernel_rule(hass, call)
+
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_SET_KERNEL_RULE, set_kernel_rule, SET_KERNEL_RULE_SCHEMA
+    )
     if hass.http is None or "frontend" not in hass.config.components:
         return True
     if not await hass.async_add_executor_job(CARD_FILE.is_file):
