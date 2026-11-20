@@ -103,12 +103,14 @@
           "language": "Language of entity names and messages",
           "allow_reboot": "Allow rebooting the host from Home Assistant",
           "wake_on_lan": "Wake-on-LAN (wake the host when it is offline)",
-          "wol_broadcast": "Wake-on-LAN broadcast address"
+          "wol_broadcast": "Wake-on-LAN broadcast address",
+          "allow_upgrade": "Allow upgrading the packages from Home Assistant"
         },
         "data_description": {
           "allow_reboot": "Creates a \"Reboot host\" button. Anyone allowed to press buttons can then reboot this host.",
           "wake_on_lan": "Needs Wake-on-LAN enabled in the host's BIOS/firmware. The packet is sent from Home Assistant, so the host must be on the same network segment (it does not cross a VPN).",
-          "wol_broadcast": "Empty = 255.255.255.255. Use the subnet broadcast address (e.g. 192.168.1.255) if the packet does not reach the host."
+          "wol_broadcast": "Empty = 255.255.255.255. Use the subnet broadcast address (e.g. 192.168.1.255) if the packet does not reach the host.",
+          "allow_upgrade": "Creates an \"Upgrade packages\" button (apt only: apt-get update then upgrade, existing configuration files are kept, never removes a package). Refused while a dirvish backup runs. Anyone allowed to press buttons can then upgrade this host."
         }
       },
       "smart": {
@@ -313,6 +315,12 @@
       },
       "wake_host": {
         "name": "Wake host"
+      },
+      "update_lists": {
+        "name": "Update package lists"
+      },
+      "upgrade_packages": {
+        "name": "Upgrade packages"
       }
     }
   },

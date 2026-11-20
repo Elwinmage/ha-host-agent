@@ -202,5 +202,26 @@ async def reboot(ssh: SshClient) -> None:
         raise RemoteError("unexpected helper output")
 
 
+async def apt_update(ssh: SshClient) -> None:
+    output = await helper(ssh, "apt-update", timeout=600)
+    if "APT_UPDATED" not in output:
+        raise RemoteError("unexpected helper output")
+
+
+async def apt_upgrade(ssh: SshClient) -> None:
+    """Start the upgrade in the background on the host (it returns first)."""
+    output = await helper(ssh, "apt-upgrade", timeout=60)
+    if "UPGRADE_STARTED" not in output:
+        raise RemoteError("unexpected helper output")
+
+
+async def upgrade_status(ssh: SshClient) -> dict[str, str]:
+    return parse_kv(await helper(ssh, "apt-upgrade-status", timeout=30))
+
+
+async def upgrade_log(ssh: SshClient) -> str:
+    return await helper(ssh, "apt-upgrade-log", timeout=30)
+
+
 async def uninstall(ssh: SshClient, purge: bool) -> None:
     await helper(ssh, "uninstall", *(["--purge"] if purge else []), timeout=120)

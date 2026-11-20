@@ -41,6 +41,7 @@ CONF_COLLECTORS: Final = "collectors"
 # Remote host actions (opt-in, per host)
 CONF_ALLOW_REBOOT: Final = "allow_reboot"
 CONF_WAKE_ON_LAN: Final = "wake_on_lan"
+CONF_ALLOW_UPGRADE: Final = "allow_upgrade"
 CONF_WOL_BROADCAST: Final = "wol_broadcast"
 
 LANGUAGES: Final = ["fr", "en"]
@@ -55,6 +56,12 @@ AUTO_UPDATE_RETRY: Final = 24 * 3600
 REBOOT_GRACE: Final = 15 * 60
 # ...and this long after the agent reports again (so the "back online" event is planned too)
 REBOOT_RETURN_GRACE: Final = 60
+
+# Package upgrade: status polling while it runs (the host may reboot or lose SSH meanwhile)
+UPGRADE_POLL: Final = 10
+UPGRADE_MAX_SECONDS: Final = 3 * 3600
+UPGRADE_RECOVER_DELAY: Final = 30
+EVENT_UPGRADE: Final = "host_agent_upgrade"
 
 DEFAULT_WOL_BROADCAST: Final = "255.255.255.255"
 WOL_PORT: Final = 9

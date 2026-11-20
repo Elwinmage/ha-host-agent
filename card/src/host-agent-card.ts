@@ -427,6 +427,7 @@ export class HostAgentCard extends LitElement {
                 : this.t("updates_count", { count: pending })
               : this.t("up_to_date");
           })}
+          ${this.renderUpdateActions(model)}
           ${this.renderSubjectChip(model.services, "mdi:cogs", (s) => {
             const failed = numberState(s.metric("failed")) ?? 0;
             const down = s.issues.filter((issue) => issue.code.startsWith("service_down")).length;
@@ -441,6 +442,77 @@ export class HostAgentCard extends LitElement {
           ${this.renderRules(model)}
         </div>
       </div>
+    `;
+  }
+
+  /** Run a button of the integration; a refusal (backup running, helper outdated...) is shown as a notification. */
+  private async runAction(entity: HassEntity | undefined, event?: Event): Promise<void> {
+    try {
+      await this.press(entity, event);
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String((err as any)?.message ?? err);
+      this.notify(this.t("upgrade_error", { error }));
+    }
+  }
+
+  /** apt hosts: refresh the lists, upgrade (admins, after a confirmation) and follow the upgrade. */
+  private renderUpdateActions(model: HostModel): TemplateResult | typeof nothing {
+    if (model.offline || model.updates?.entity.attributes.manager !== "apt") return nothing;
+    const attrs = model.aptUpgrade?.attributes ?? {};
+    const state = attrs.upgrade_state as string | undefined;
+    const admin = this.hass?.user?.is_admin !== false;
+    if (state === "running") {
+      return html`<span class="chip sev-warning"><ha-icon icon="mdi:progress-wrench"></ha-icon>${this.t("upgrade_running")}</span>`;
+    }
+    const pending = numberState(model.updates?.metric("pending")) ?? 0;
+    const finished = Number(attrs.upgrade_finished) || 0;
+    const recent = finished > 0 && Math.abs(Date.now() / 1000 - finished) < 3600;
+    const log = Array.isArray(attrs.upgrade_log) ? (attrs.upgrade_log as string[]).join("\n") : "";
+    return html`
+      ${state === "failed"
+        ? html`<span class="chip sev-critical" title=${log}>
+            <ha-icon icon="mdi:package-variant-remove"></ha-icon>${this.t("upgrade_failed", { code: attrs.upgrade_exit ?? "?" })}
+          </span>`
+        : state === "ok" && recent
+          ? html`<span class="chip sev-ok" title=${log}><ha-icon icon="mdi:package-variant-closed-check"></ha-icon>${this.t("upgrade_done")}</span>`
+          : nothing}
+      ${model.aptUpdate && admin
+        ? html`<button
+            class="icon-button small"
+            title=${this.t("update_lists")}
+            ?disabled=${model.aptUpdate.state === "unavailable"}
+            @click=${(ev: Event) => this.runAction(model.aptUpdate, ev)}
+          >
+            <ha-icon icon="mdi:database-refresh"></ha-icon>
+          </button>`
+        : nothing}
+      ${model.aptUpgrade && admin
+        ? this.confirming === "upgrade"
+          ? html`<span class="confirm">
+              ${this.t("upgrade_confirm", { count: pending })}
+              <button
+                class="btn danger"
+                @click=${async (ev: Event) => {
+                  this.disarm();
+                  await this.runAction(model.aptUpgrade, ev);
+                }}
+              >
+                ${this.t("confirm")}
+              </button>
+              <button class="btn" @click=${() => this.disarm()}>${this.t("cancel")}</button>
+            </span>`
+          : html`<button
+              class="icon-button small"
+              title=${this.t("upgrade_packages")}
+              ?disabled=${model.aptUpgrade.state === "unavailable" || pending === 0}
+              @click=${(ev: Event) => {
+                ev.stopPropagation();
+                this.arm("upgrade");
+              }}
+            >
+              <ha-icon icon="mdi:package-up"></ha-icon>
+            </button>`
+        : nothing}
     `;
   }
 

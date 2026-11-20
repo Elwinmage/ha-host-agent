@@ -14,6 +14,11 @@
 #   rollback                    re-activate the previous version
 #   restart                     restart the agent service
 #   reboot                      reboot the host (returns first, the reboot follows a few seconds later)
+#   apt-update                  apt-get update (synchronous)
+#   apt-upgrade                 start apt-get update + upgrade in the background (refused while a
+#                               dirvish backup runs); returns first
+#   apt-upgrade-status          key=value report of the last / current upgrade
+#   apt-upgrade-log             tail of the upgrade log
 #   read-config                 print /etc/host-agent/config.yaml (no secret)
 #   uninstall [--purge]         stop and remove the agent (--purge: configuration and state too)
 set -euo pipefail
@@ -25,6 +30,8 @@ ROOT="${HOST_AGENT_ROOT:-}"
 SYSTEMCTL="${HOST_AGENT_SYSTEMCTL:-systemctl}"
 PYTHON="${HOST_AGENT_PYTHON:-/usr/bin/python3}"
 STABLE_WAIT="${HOST_AGENT_STABLE_WAIT:-8}"
+APT_GET="${HOST_AGENT_APT_GET:-apt-get}"
+PGREP="${HOST_AGENT_PGREP:-pgrep}"
 
 PREFIX="${ROOT}/opt/host-agent"
 CONF_DIR="${ROOT}/etc/host-agent"
@@ -36,17 +43,34 @@ WRAPPER="${ROOT}/usr/local/bin/host-agent"
 SERVICE=host-agent.service
 KEEP_VERSIONS=3
 LOCK="${ROOT}/run/host-agent-admin.lock"
+UPGRADE_DIR="${ROOT}/var/lib/host-agent-upgrade"
+UPGRADE_LOCK="${UPGRADE_DIR}/lock"
+UPGRADE_STATE="${UPGRADE_DIR}/state"
+UPGRADE_LOG="${UPGRADE_DIR}/upgrade.log"
+SELF="$(readlink -f "$0")"
 
 die() { echo "ERROR: $*" >&2; exit "${2:-1}"; }
 
-mkdir -p "$(dirname "${LOCK}")"
-exec 9>"${LOCK}"
-# util-linux flock has a timeout option, BusyBox's does not
-if flock --help 2>&1 | grep -q -- "-w"; then
-    flock -w 120 9 || die "another operation is running" 75
-else
-    timeout 120 flock 9 || die "another operation is running" 75
-fi
+command="${1:-}"
+shift || true
+
+take_lock() {
+    mkdir -p "$(dirname "${LOCK}")"
+    exec 9>"${LOCK}"
+    # util-linux flock has a timeout option, BusyBox's does not
+    if flock --help 2>&1 | grep -q -- "-w"; then
+        flock -w 120 9 || die "another operation is running" 75
+    else
+        timeout 120 flock 9 || die "another operation is running" 75
+    fi
+}
+
+# The package commands have their own lock: a long upgrade must never block the lifecycle
+# commands (status, restart, reboot...) nor its own status
+case "${command}" in
+    apt-update|apt-upgrade|apt-upgrade-run|apt-upgrade-status|apt-upgrade-log) ;;
+    *) take_lock ;;
+esac
 
 # Incoming files are written by the unprivileged admin account: refuse links and
 # special files so root never follows a path chosen by that account.
@@ -272,6 +296,114 @@ cmd_reboot() {
     echo "REBOOTING"
 }
 
+# --------------------------------------------------------------------------- #
+# Package updates (apt only)
+# --------------------------------------------------------------------------- #
+
+# Unattended and conservative: configuration files already modified on the host are kept
+# (the packaged version is written next to them as .dpkg-dist), no question is ever asked
+apt_env() {
+    env LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 "$@"
+}
+
+require_apt() { command -v "${APT_GET}" >/dev/null 2>&1 || die "apt is not available on this host" 69; }
+
+# A dirvish backup must not be disturbed by a kernel module, ZFS or library upgrade
+backup_running() { "${PGREP}" -f '(^|[ /])dirvish(-runall)?( |$)' >/dev/null 2>&1; }
+
+# An upgrade holds this lock for its whole life: a dead worker is detected by the free lock
+upgrade_lock_free() {
+    mkdir -p "${UPGRADE_DIR}"
+    exec 8>"${UPGRADE_LOCK}"
+    if flock -n 8; then
+        flock -u 8
+        return 0
+    fi
+    return 1
+}
+
+write_upgrade_state() {
+    # state started finished exit
+    printf 'state=%s\nstarted=%s\nfinished=%s\nexit=%s\n' "$1" "$2" "$3" "$4" > "${UPGRADE_STATE}.new"
+    mv -f "${UPGRADE_STATE}.new" "${UPGRADE_STATE}"
+}
+
+cmd_apt_update() {
+    require_apt
+    upgrade_lock_free || die "an update or upgrade is already running" 75
+    exec 8>"${UPGRADE_LOCK}"
+    flock -n 8 || die "an update or upgrade is already running" 75
+    local rc=0
+    apt_env "${APT_GET}" -q update >"${UPGRADE_DIR}/update.log" 2>&1 || rc=$?
+    if (( rc != 0 )); then
+        tail -n 5 "${UPGRADE_DIR}/update.log" >&2 || true
+        die "apt-get update failed (exit ${rc})" 3
+    fi
+    echo "APT_UPDATED"
+}
+
+cmd_apt_upgrade() {
+    require_apt
+    backup_running && die "a dirvish backup is running, upgrade refused" 75
+    upgrade_lock_free || die "an update or upgrade is already running" 75
+    write_upgrade_state running "$(date +%s)" "" ""
+    : > "${UPGRADE_LOG}"
+    # Out of the SSH session: restarting sshd or systemd during the upgrade must not kill it
+    if [[ -z "${ROOT}" ]] && command -v systemd-run >/dev/null 2>&1; then
+        systemd-run --quiet --collect --unit=host-agent-upgrade "${SELF}" apt-upgrade-run \
+            </dev/null >/dev/null 2>&1 9>&- || die "cannot start the upgrade" 3
+    else
+        setsid "${SELF}" apt-upgrade-run </dev/null >/dev/null 2>&1 9>&- &
+    fi
+    echo "UPGRADE_STARTED"
+}
+
+# Worker: runs detached, holds the upgrade lock until done
+cmd_apt_upgrade_run() {
+    mkdir -p "${UPGRADE_DIR}"
+    exec 8>"${UPGRADE_LOCK}"
+    flock -n 8 || exit 0
+    local started rc=0
+    started="$(sed -n 's/^started=//p' "${UPGRADE_STATE}" 2>/dev/null || true)"
+    [[ -n "${started}" ]] || started="$(date +%s)"
+    write_upgrade_state running "${started}" "" ""
+    {
+        echo "== apt-get update"
+        apt_env "${APT_GET}" -q update || exit 1
+        echo "== apt-get upgrade"
+        apt_env "${APT_GET}" -q -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+            -o DPkg::Lock::Timeout=120 upgrade
+    } >"${UPGRADE_LOG}" 2>&1 || rc=$?
+    if (( rc == 0 )); then
+        write_upgrade_state ok "${started}" "$(date +%s)" 0
+    else
+        write_upgrade_state failed "${started}" "$(date +%s)" "${rc}"
+    fi
+}
+
+cmd_apt_upgrade_status() {
+    if [[ ! -f "${UPGRADE_STATE}" ]]; then
+        echo "state=idle"
+        return 0
+    fi
+    local state
+    state="$(sed -n 's/^state=//p' "${UPGRADE_STATE}")"
+    local started
+    started="$(sed -n 's/^started=//p' "${UPGRADE_STATE}")"
+    # The worker is gone (host rebooted or killed) without writing its result; the grace
+    # period covers the moment between the start request and the worker taking the lock
+    if [[ "${state}" == "running" && "${started:-0}" =~ ^[0-9]+$ ]] \
+        && (( $(date +%s) - started > 20 )) && upgrade_lock_free; then
+        write_upgrade_state failed "${started}" "$(date +%s)" interrupted
+    fi
+    cat "${UPGRADE_STATE}"
+}
+
+cmd_apt_upgrade_log() {
+    [[ -f "${UPGRADE_LOG}" ]] || return 0
+    tail -n 40 "${UPGRADE_LOG}"
+}
+
 cmd_read_config() {
     [[ -f "${CONF_DIR}/config.yaml" ]] || die "no configuration" 66
     cat "${CONF_DIR}/config.yaml"
@@ -284,15 +416,13 @@ cmd_uninstall() {
     "${SYSTEMCTL}" daemon-reload >/dev/null 2>&1 || true
     rm -rf "${PREFIX}"
     if [[ "${purge}" == "--purge" ]]; then
-        rm -rf "${CONF_DIR}" "${STATE_DIR}"
+        rm -rf "${CONF_DIR}" "${STATE_DIR}" "${UPGRADE_DIR}"
         # Revoke Home Assistant's access last
         rm -f "${ROOT}/etc/sudoers.d/host-agent-admin" "${ADMIN_HOME}/.ssh/authorized_keys"
     fi
     echo "UNINSTALLED"
 }
 
-command="${1:-}"
-shift || true
 case "${command}" in
     install|configure) check_all_incoming ;;
 esac
@@ -303,7 +433,12 @@ case "${command}" in
     rollback) cmd_rollback ;;
     restart) cmd_restart ;;
     reboot) cmd_reboot ;;
+    apt-update) cmd_apt_update ;;
+    apt-upgrade) cmd_apt_upgrade ;;
+    apt-upgrade-run) cmd_apt_upgrade_run ;;
+    apt-upgrade-status) cmd_apt_upgrade_status ;;
+    apt-upgrade-log) cmd_apt_upgrade_log ;;
     read-config) cmd_read_config ;;
     uninstall) cmd_uninstall "$@" ;;
-    *) die "usage: host-agent-admin status|install VERSION SHA256|configure|rollback|restart|reboot|read-config|uninstall [--purge]" 64 ;;
+    *) die "usage: host-agent-admin status|install VERSION SHA256|configure|rollback|restart|reboot|apt-update|apt-upgrade|apt-upgrade-status|apt-upgrade-log|read-config|uninstall [--purge]" 64 ;;
 esac

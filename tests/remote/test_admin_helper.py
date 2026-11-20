@@ -210,3 +210,119 @@ def test_reboot_returns_before_the_host_goes_down(env):
             break
         time.sleep(0.1)
     assert "reboot" in log.read_text()
+
+
+FAKE_APT = """#!/bin/bash
+# Fake apt-get: records its arguments and environment; "upgrade" fails when FAKE_APT_FAIL is set
+echo "$*" >> "${HOST_AGENT_ROOT}/apt.log"
+echo "DEBIAN_FRONTEND=${DEBIAN_FRONTEND}" >> "${HOST_AGENT_ROOT}/apt.log"
+[[ "$*" == *upgrade* ]] && sleep "${FAKE_APT_SLEEP:-0}"
+[[ "$*" == *upgrade* && -n "${FAKE_APT_FAIL:-}" ]] && { echo "E: broken"; exit 100; }
+[[ "$*" == *update* && -n "${FAKE_APT_UPDATE_FAIL:-}" ]] && { echo "E: no network" >&2; exit 100; }
+echo "done"
+"""
+
+
+@pytest.fixture
+def apt(env):
+    fake = env["tmp"] / "apt-get"
+    fake.write_text(FAKE_APT)
+    fake.chmod(0o755)
+    env["env"]["HOST_AGENT_APT_GET"] = str(fake)
+    # No dirvish backup by default (pgrep exits 1 when nothing matches)
+    pgrep = env["tmp"] / "pgrep"
+    pgrep.write_text("#!/bin/bash\nexit 1\n")
+    pgrep.chmod(0o755)
+    env["env"]["HOST_AGENT_PGREP"] = str(pgrep)
+    return env
+
+
+def wait_upgrade(env, timeout=10.0):
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        out = helper(env, "apt-upgrade-status").stdout
+        if "state=running" not in out:
+            return out
+        time.sleep(0.1)
+    raise AssertionError("upgrade did not finish")
+
+
+def test_apt_update(apt):
+    res = helper(apt, "apt-update")
+    assert res.returncode == 0, res.stderr
+    assert "APT_UPDATED" in res.stdout
+    assert "update" in (apt["root"] / "apt.log").read_text()
+
+
+def test_apt_update_failure(apt):
+    apt["env"]["FAKE_APT_UPDATE_FAIL"] = "1"
+    res = helper(apt, "apt-update")
+    assert res.returncode == 3
+    assert "apt-get update failed" in res.stderr
+
+
+def test_apt_not_available(env):
+    env["env"]["HOST_AGENT_APT_GET"] = "definitely-not-installed"
+    for command in ("apt-update", "apt-upgrade"):
+        res = helper(env, command)
+        assert res.returncode == 69
+        assert "apt is not available" in res.stderr
+
+
+def test_upgrade_keeps_configuration_and_is_unattended(apt):
+    res = helper(apt, "apt-upgrade")
+    assert res.returncode == 0, res.stderr
+    assert "UPGRADE_STARTED" in res.stdout
+    status = wait_upgrade(apt)
+    assert "state=ok" in status and "exit=0" in status
+    log = (apt["root"] / "apt.log").read_text()
+    assert "--force-confold" in log and "--force-confdef" in log
+    assert "DEBIAN_FRONTEND=noninteractive" in log
+    # `upgrade`, never `dist-upgrade` (no package is ever removed)
+    assert "dist-upgrade" not in log and "-y" in log
+    assert "== apt-get upgrade" in helper(apt, "apt-upgrade-log").stdout
+
+
+def test_upgrade_failure_is_reported(apt):
+    apt["env"]["FAKE_APT_FAIL"] = "1"
+    assert helper(apt, "apt-upgrade").returncode == 0
+    status = wait_upgrade(apt)
+    assert "state=failed" in status and "exit=100" in status
+    assert "E: broken" in helper(apt, "apt-upgrade-log").stdout
+
+
+def test_upgrade_refused_during_a_backup(apt):
+    pgrep = apt["tmp"] / "pgrep"
+    pgrep.write_text("#!/bin/bash\necho 4242\n")
+    res = helper(apt, "apt-upgrade")
+    assert res.returncode == 75
+    assert "backup is running" in res.stderr
+    assert "state=idle" in helper(apt, "apt-upgrade-status").stdout
+    assert not (apt["root"] / "apt.log").exists()
+
+
+def test_upgrade_not_started_twice_and_status_does_not_wait(apt):
+    import time
+
+    apt["env"]["FAKE_APT_SLEEP"] = "2"
+    assert helper(apt, "apt-upgrade").returncode == 0
+    time.sleep(0.5)
+    begin = time.monotonic()
+    assert "state=running" in helper(apt, "apt-upgrade-status").stdout
+    # the lifecycle commands are not blocked by the upgrade either
+    assert helper(apt, "status").returncode == 0
+    assert time.monotonic() - begin < 1.5
+    again = helper(apt, "apt-upgrade")
+    assert again.returncode == 75 and "already running" in again.stderr
+    assert helper(apt, "apt-update").returncode == 75
+    assert "state=ok" in wait_upgrade(apt)
+
+
+def test_dead_worker_is_reported_as_interrupted(apt):
+    state = apt["root"] / "var/lib/host-agent-upgrade"
+    state.mkdir(parents=True)
+    (state / "state").write_text("state=running\nstarted=1\nfinished=\nexit=\n")
+    status = helper(apt, "apt-upgrade-status").stdout
+    assert "state=failed" in status and "exit=interrupted" in status

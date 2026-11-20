@@ -29,6 +29,9 @@ export interface HostModel {
   // Created by the integration, opt-in per host (found through their node_id/action attributes)
   reboot?: HassEntity;
   wake?: HassEntity;
+  // Package updates (apt hosts): the lists refresh is always created, the upgrade is opt-in
+  aptUpdate?: HassEntity;
+  aptUpgrade?: HassEntity;
   system?: Subject;
   disks: Subject[];
   gpus: Subject[];
@@ -127,6 +130,8 @@ export function buildModel(hass: HomeAssistant, config: HostAgentCardConfig): Ho
     refresh: find("button", `${nodeId}_refresh`),
     reboot: action("reboot"),
     wake: action("wake"),
+    aptUpdate: action("apt_update"),
+    aptUpgrade: action("apt_upgrade"),
     system,
     disks: ofKind("disk"),
     filesystems: ofKind("filesystem").sort((a, b) =>

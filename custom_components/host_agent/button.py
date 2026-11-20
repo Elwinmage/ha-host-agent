@@ -1,4 +1,4 @@
-"""Buttons: restart the agent, reboot the host, wake it up."""
+"""Buttons: restart the agent, reboot the host, wake it up, update the host's packages."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import HostAgentConfigEntry
-from .const import CONF_ALLOW_REBOOT, CONF_WAKE_ON_LAN
+from .const import CONF_ALLOW_REBOOT, CONF_ALLOW_UPGRADE, CONF_WAKE_ON_LAN
 from .entity import HostAgentEntity
 from .runtime import HostAgentRuntime, wake_supported
 
@@ -19,10 +19,13 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: HostAgentConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
     runtime = entry.runtime_data
-    entities: list[ButtonEntity] = [RestartAgentButton(runtime)]
+    # Refreshing the package lists installs nothing: always there (the helper refuses on non-apt hosts)
+    entities: list[ButtonEntity] = [RestartAgentButton(runtime), UpdateListsButton(runtime)]
     # Opt-in per host: the entity does not exist unless the option is on
     if entry.options.get(CONF_ALLOW_REBOOT):
         entities.append(RebootHostButton(runtime))
+    if entry.options.get(CONF_ALLOW_UPGRADE):
+        entities.append(UpgradePackagesButton(runtime))
     if entry.options.get(CONF_WAKE_ON_LAN) and wake_supported(dict(entry.data)):
         entities.append(WakeHostButton(runtime))
     async_add_entities(entities)
@@ -81,3 +84,50 @@ class WakeHostButton(_CardButton):
 
     async def async_press(self) -> None:
         await self.runtime.async_wake()
+
+
+class UpdateListsButton(_CardButton):
+    """apt-get update: refreshes the package lists, so the pending count is accurate."""
+
+    action = "apt_update"
+
+    def __init__(self, runtime: HostAgentRuntime) -> None:
+        super().__init__(runtime, "update_lists")
+
+    @property
+    def available(self) -> bool:
+        # Stays available while an upgrade runs: the card reads its progress from the attributes
+        return self.runtime.agent.online is True
+
+    async def async_press(self) -> None:
+        await self.runtime.async_apt_update()
+
+
+class UpgradePackagesButton(_CardButton):
+    """apt-get upgrade in the background (opt-in); the result is in the attributes and an event."""
+
+    _attr_icon = "mdi:package-up"
+    action = "apt_upgrade"
+
+    def __init__(self, runtime: HostAgentRuntime) -> None:
+        super().__init__(runtime, "upgrade_packages")
+
+    @property
+    def available(self) -> bool:
+        # Stays available while an upgrade runs: the card reads its progress from the attributes
+        return self.runtime.agent.online is True
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        upgrade = self.runtime.upgrade
+        return {
+            **super().extra_state_attributes,
+            "upgrade_state": upgrade.get("state", "idle"),
+            "upgrade_started": upgrade.get("started"),
+            "upgrade_finished": upgrade.get("finished"),
+            "upgrade_exit": upgrade.get("exit"),
+            "upgrade_log": upgrade.get("log", []),
+        }
+
+    async def async_press(self) -> None:
+        await self.runtime.async_apt_upgrade()

@@ -81,7 +81,7 @@ option is enabled). An update:
 
 | Menu | Settings |
 |---|---|
-| General | language, automatic agent updates, *reboot button* (opt-in), *Wake-on-LAN* when offline (opt-in, optional broadcast address; not offered for Raspberry Pi) |
+| General | language, automatic agent updates, *reboot button* (opt-in), *Wake-on-LAN* when offline (opt-in, optional broadcast address; not offered for Raspberry Pi), *package upgrade button* (opt-in, apt hosts) |
 | Disks | SMART reading interval, temperature thresholds, self-test schedule (short / long / time window), ignored disks |
 | Filesystems | mountpoints that must be mounted, mountpoints to watch, used space thresholds |
 | dirvish backups | banks (default: `master.conf`), ignored vaults, maximum age, timeline length, rsync 24 handling |
@@ -119,6 +119,16 @@ show_restart: true          # reboot button (needs the integration's reboot opti
 - reboot button (confirmation): runs `host-agent-admin reboot`; the offline alert is muted
   during a planned reboot (`planned` in the blueprint event data). Hosts installed before
   this version must be re-authenticated once to get the updated helper;
+- apt hosts: a button refreshes the package lists (`apt-get update`, always created) and, with the
+  `allow_upgrade` option, an upgrade button (admins, after a confirmation) runs `apt-get update` then
+  `apt-get upgrade` in the background on the host. Unattended and conservative: configuration files
+  already modified are kept (`--force-confold`, the packaged version is left as `.dpkg-dist`), no
+  question is asked, and no package is ever removed (`upgrade`, not `dist-upgrade`; packages held
+  back stay pending). It is refused while a dirvish backup runs and while another upgrade runs.
+  Progress and the end of the log are in the button's attributes and the card; the
+  `host_agent_upgrade` event (`node_id`, `device_name`, `result` ok/failed, `exit_code`) fires when it
+  ends. A kernel or library upgrade may leave « reboot required »: the reboot stays a separate action.
+  Hosts installed before this version must be re-authenticated once to get the updated helper;
 - Wake-on-LAN button when the host is offline: magic packet sent from this Home Assistant
   only (same LAN; it cannot cross a VPN);
 - disks: self-test icon linking to the short / long test buttons (long test asks for

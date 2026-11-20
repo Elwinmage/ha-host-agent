@@ -70,6 +70,10 @@ def fake_remote() -> Generator[MagicMock]:
     mocks.rollback = AsyncMock()
     mocks.restart = AsyncMock()
     mocks.reboot = AsyncMock()
+    mocks.apt_update = AsyncMock()
+    mocks.apt_upgrade = AsyncMock()
+    mocks.upgrade_status = AsyncMock(return_value={"state": "idle"})
+    mocks.upgrade_log = AsyncMock(return_value="")
     mocks.uninstall = AsyncMock()
     targets = [
         "preflight",
@@ -82,6 +86,10 @@ def fake_remote() -> Generator[MagicMock]:
         "rollback",
         "restart",
         "reboot",
+        "apt_update",
+        "apt_upgrade",
+        "upgrade_status",
+        "upgrade_log",
         "uninstall",
     ]
     patches = [patch(f"custom_components.host_agent.remote.{name}", getattr(mocks, name)) for name in targets]

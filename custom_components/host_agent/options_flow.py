@@ -21,6 +21,7 @@ from . import remote
 from .agent_config import CollectorsError, validate_collectors
 from .const import (
     CONF_ALLOW_REBOOT,
+    CONF_ALLOW_UPGRADE,
     CONF_AUTO_UPDATE,
     CONF_COLLECTORS,
     CONF_LANGUAGE,
@@ -253,6 +254,7 @@ class HostAgentOptionsFlow(OptionsFlow):
             vol.Required(CONF_AUTO_UPDATE, default=options.get(CONF_AUTO_UPDATE, False)): bool,
             vol.Required(CONF_LANGUAGE, default=options.get(CONF_LANGUAGE, "en")): vol.In(LANGUAGES),
             vol.Required(CONF_ALLOW_REBOOT, default=options.get(CONF_ALLOW_REBOOT, False)): bool,
+            vol.Required(CONF_ALLOW_UPGRADE, default=options.get(CONF_ALLOW_UPGRADE, False)): bool,
         }
         if can_wake:
             fields[vol.Required(CONF_WAKE_ON_LAN, default=options.get(CONF_WAKE_ON_LAN, False))] = bool

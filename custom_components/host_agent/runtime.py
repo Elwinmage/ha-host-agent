@@ -27,6 +27,7 @@ from .const import (
     ADMIN_USER,
     AUTO_UPDATE_DELAY,
     AUTO_UPDATE_RETRY,
+    CONF_ALLOW_UPGRADE,
     CONF_AUTO_UPDATE,
     CONF_COLLECTORS,
     CONF_DEPLOYED_VERSION,
@@ -40,12 +41,16 @@ from .const import (
     DEFAULT_BASE_TOPIC,
     DEFAULT_WOL_BROADCAST,
     DOMAIN,
+    EVENT_UPGRADE,
     HEALTH_TIMEOUT,
     ISSUE_HOST_KEY,
     ISSUE_PROTOCOL,
     PROTOCOL_VERSION,
     REBOOT_GRACE,
     REBOOT_RETURN_GRACE,
+    UPGRADE_MAX_SECONDS,
+    UPGRADE_POLL,
+    UPGRADE_RECOVER_DELAY,
 )
 from .ssh import HostKeyMismatch, InvalidAuth, SshClient, SshError
 from .wol import send_magic_packet
@@ -90,6 +95,10 @@ class HostAgentRuntime:
         self._auto_timer: CALLBACK_TYPE | None = None
         # monotonic time until which a reboot asked from Home Assistant counts as planned
         self._reboot_deadline: float | None = None
+        # Last package upgrade: {"state": idle|running|ok|failed, started, finished, exit, log}
+        self.upgrade: dict[str, Any] = {"state": "idle"}
+        self._upgrade_task: asyncio.Task[None] | None = None
+        self._recover_timer: CALLBACK_TYPE | None = None
 
     # ------------------------------------------------------------------ #
     # Properties
@@ -137,6 +146,9 @@ class HostAgentRuntime:
             await mqtt.async_subscribe(self.hass, f"{self.base}/state/agent_version", self._on_version, qos=1)
         )
         self._schedule_auto_update(AUTO_UPDATE_DELAY)
+        if self.entry.options.get(CONF_ALLOW_UPGRADE):
+            # An upgrade started before Home Assistant restarted keeps running on the host
+            self._recover_timer = async_call_later(self.hass, UPGRADE_RECOVER_DELAY, self._recover_upgrade)
 
     async def async_stop(self) -> None:
         for unsub in self._unsubscribe:
@@ -145,6 +157,12 @@ class HostAgentRuntime:
         if self._auto_timer:
             self._auto_timer()
             self._auto_timer = None
+        if self._recover_timer:
+            self._recover_timer()
+            self._recover_timer = None
+        if self._upgrade_task:
+            self._upgrade_task.cancel()
+            self._upgrade_task = None
 
     def add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
         self.agent.listeners.append(listener)
@@ -301,6 +319,14 @@ class HostAgentRuntime:
             except remote.RemoteError as err:
                 raise HomeAssistantError(f"{self.entry.title}: {err}") from err
 
+    def _remote_failure(self, err: remote.RemoteError) -> HomeAssistantError:
+        if "usage:" in str(err):
+            # Hosts prepared by an older version only know the previous commands
+            return HomeAssistantError(
+                f"{self.entry.title}: the helper on the host is outdated, re-authenticate the integration to update it"
+            )
+        return HomeAssistantError(f"{self.entry.title}: {err}")
+
     async def async_reboot(self) -> None:
         """Reboot the host through the restricted helper."""
         async with self._lock:
@@ -310,15 +336,110 @@ class HostAgentRuntime:
             except SshError as err:
                 raise self._handle_ssh_error(err) from err
             except remote.RemoteError as err:
-                if "usage:" in str(err):
-                    # Hosts prepared by an older version only know the previous commands
-                    raise HomeAssistantError(
-                        f"{self.entry.title}: the helper on the host is outdated, "
-                        "re-authenticate the integration to update it"
-                    ) from err
-                raise HomeAssistantError(f"{self.entry.title}: {err}") from err
+                raise self._remote_failure(err) from err
         self._reboot_deadline = time.monotonic() + REBOOT_GRACE
         self._notify()
+
+    async def _ask_refresh(self) -> None:
+        """Have the agent re-run its collectors now, so the pending package count follows."""
+        try:
+            await mqtt.async_publish(self.hass, f"{self.base}/cmd/refresh", "PRESS", qos=1)
+        except HomeAssistantError as err:
+            _LOGGER.debug("%s: refresh request failed: %s", self.entry.title, err)
+
+    async def async_apt_update(self) -> None:
+        """apt-get update on the host (refreshes the package lists, installs nothing)."""
+        if self.upgrade.get("state") == "running":
+            raise HomeAssistantError(f"{self.entry.title}: a package upgrade is running")
+        try:
+            async with self.ssh() as ssh:
+                await remote.apt_update(ssh)
+        except SshError as err:
+            raise self._handle_ssh_error(err) from err
+        except remote.RemoteError as err:
+            raise self._remote_failure(err) from err
+        await self._ask_refresh()
+
+    async def async_apt_upgrade(self) -> None:
+        """apt-get update + upgrade in the background; refused while a backup runs (the helper checks)."""
+        if not self.entry.options.get(CONF_ALLOW_UPGRADE):
+            raise HomeAssistantError(f"{self.entry.title}: package upgrades are not enabled for this host")
+        if self.upgrade.get("state") == "running":
+            raise HomeAssistantError(f"{self.entry.title}: a package upgrade is already running")
+        try:
+            async with self.ssh() as ssh:
+                await remote.apt_upgrade(ssh)
+        except SshError as err:
+            raise self._handle_ssh_error(err) from err
+        except remote.RemoteError as err:
+            raise self._remote_failure(err) from err
+        self.upgrade = {"state": "running", "started": int(time.time())}
+        self._notify()
+        self._track_upgrade()
+
+    def _track_upgrade(self) -> None:
+        if self._upgrade_task and not self._upgrade_task.done():
+            return
+        self._upgrade_task = self.hass.async_create_background_task(
+            self._poll_upgrade(), f"host_agent upgrade {self.node_id}"
+        )
+
+    async def _read_upgrade(self) -> dict[str, Any] | None:
+        """Status of the upgrade on the host (None when the host cannot be reached)."""
+        try:
+            async with self.ssh() as ssh:
+                status = await remote.upgrade_status(ssh)
+                state = status.get("state", "idle")
+                result: dict[str, Any] = {"state": state}
+                for key in ("started", "finished"):
+                    if status.get(key, "").isdigit():
+                        result[key] = int(status[key])
+                if status.get("exit", "") != "":
+                    result["exit"] = status["exit"]
+                if state in ("ok", "failed"):
+                    result["log"] = (await remote.upgrade_log(ssh)).strip().splitlines()[-15:]
+                return result
+        except (SshError, remote.RemoteError) as err:
+            _LOGGER.debug("%s: upgrade status unavailable: %s", self.entry.title, err)
+            return None
+
+    async def _poll_upgrade(self) -> None:
+        deadline = time.monotonic() + UPGRADE_MAX_SECONDS
+        while time.monotonic() < deadline:
+            await asyncio.sleep(UPGRADE_POLL)
+            status = await self._read_upgrade()
+            if status is None:
+                # The host may be restarting a service or rebooting: keep trying
+                continue
+            self.upgrade = status
+            self._notify()
+            if status["state"] != "running":
+                self._finish_upgrade(status)
+                return
+        self.upgrade = {**self.upgrade, "state": "failed", "exit": "timeout"}
+        self._notify()
+
+    def _finish_upgrade(self, status: dict[str, Any]) -> None:
+        self.hass.bus.async_fire(
+            EVENT_UPGRADE,
+            {
+                "node_id": self.node_id,
+                "device_name": self.entry.title,
+                "result": status["state"],
+                "exit_code": status.get("exit"),
+            },
+        )
+        self.hass.async_create_task(self._ask_refresh())
+
+    async def _recover_upgrade(self, _now: Any) -> None:
+        self._recover_timer = None
+        status = await self._read_upgrade()
+        if status is None or status["state"] == "idle":
+            return
+        self.upgrade = status
+        self._notify()
+        if status["state"] == "running":
+            self._track_upgrade()
 
     async def async_wake(self) -> None:
         """Send a Wake-on-LAN magic packet from Home Assistant."""

@@ -1,7 +1,8 @@
-"""Host actions (reboot, Wake-on-LAN) and kernel log rules set from the card."""
+"""Host actions (reboot, Wake-on-LAN, package updates) and kernel log rules set from the card."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import patch
 
@@ -29,6 +30,8 @@ pytestmark = pytest.mark.parametrize("expected_lingering_timers", [True])
 
 REBOOT = "button.serveur_de_sauvegarde_reboot_host"
 WAKE = "button.serveur_de_sauvegarde_wake_host"
+UPDATE_LISTS = "button.serveur_de_sauvegarde_update_package_lists"
+UPGRADE = "button.serveur_de_sauvegarde_upgrade_packages"
 OPTIONS = {"auto_update": False, "language": "fr", "collectors": {}}
 
 
@@ -296,3 +299,159 @@ async def test_options_general_and_kernel_rules(hass: HomeAssistant, mqtt_mock, 
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"remove": ["usb"]})
     assert result["type"] == "create_entry"
     assert entry.options["collectors"]["kernel"]["rules"] == {"ata": {"ignore": True}}
+
+
+# --------------------------------------------------------------------------- #
+# Package updates
+# --------------------------------------------------------------------------- #
+
+
+def assert_refresh_asked(mqtt_mock) -> None:
+    # Newer Home Assistant versions add keyword arguments (message_expiry_interval): compare the positional ones
+    assert any(
+        call.args[:4] == ("host_agent/bkup/cmd/refresh", "PRESS", 1, False)
+        for call in mqtt_mock.async_publish.call_args_list
+    )
+
+
+async def wait_for(hass: HomeAssistant, predicate, timeout: float = 3.0) -> None:
+    for _ in range(int(timeout / 0.02)):
+        if predicate():
+            return
+        await asyncio.sleep(0.02)
+        await hass.async_block_till_done()
+    raise AssertionError("condition not reached")
+
+
+async def test_update_lists_is_always_there_and_asks_for_a_refresh(
+    hass: HomeAssistant, mqtt_mock, fake_remote
+) -> None:
+    await setup(hass)
+    online(hass)
+    await hass.async_block_till_done()
+    state = hass.states.get(UPDATE_LISTS)
+    assert state.attributes["node_id"] == "bkup" and state.attributes["action"] == "apt_update"
+    # the upgrade itself is opt-in
+    assert hass.states.get(UPGRADE) is None
+
+    await hass.services.async_call("button", "press", {"entity_id": UPDATE_LISTS}, blocking=True)
+    fake_remote.apt_update.assert_awaited_once()
+    # the agent is asked to recount the pending packages
+    assert_refresh_asked(mqtt_mock)
+
+
+async def test_update_lists_error_is_reported(hass: HomeAssistant, mqtt_mock, fake_remote) -> None:
+    await setup(hass)
+    online(hass)
+    await hass.async_block_till_done()
+    fake_remote.apt_update.side_effect = remote.RemoteError("apt is not available on this host")
+    with pytest.raises(HomeAssistantError, match="apt is not available"):
+        await hass.services.async_call("button", "press", {"entity_id": UPDATE_LISTS}, blocking=True)
+    fake_remote.apt_update.side_effect = remote.RemoteError("usage: host-agent-admin status|install")
+    with pytest.raises(HomeAssistantError, match="outdated"):
+        await hass.services.async_call("button", "press", {"entity_id": UPDATE_LISTS}, blocking=True)
+
+
+async def test_upgrade_runs_in_the_background_and_reports(
+    hass: HomeAssistant, mqtt_mock, fake_remote, monkeypatch
+) -> None:
+    monkeypatch.setattr("custom_components.host_agent.runtime.UPGRADE_POLL", 0.01)
+    entry = await setup(hass, {"allow_upgrade": True})
+    online(hass)
+    await hass.async_block_till_done()
+    events = async_capture_events(hass, "host_agent_upgrade")
+    fake_remote.upgrade_status.side_effect = [
+        {"state": "running", "started": "100"},
+        {"state": "ok", "started": "100", "finished": "160", "exit": "0"},
+    ]
+    fake_remote.upgrade_log.return_value = "== apt-get upgrade\n0 upgraded\n"
+
+    assert hass.states.get(UPGRADE).attributes["upgrade_state"] == "idle"
+    await hass.services.async_call("button", "press", {"entity_id": UPGRADE}, blocking=True)
+    fake_remote.apt_upgrade.assert_awaited_once()
+    state = hass.states.get(UPGRADE)
+    assert state.attributes["upgrade_state"] == "running"
+    # nothing else can be started meanwhile
+    with pytest.raises(HomeAssistantError, match="already running"):
+        await hass.services.async_call("button", "press", {"entity_id": UPGRADE}, blocking=True)
+    with pytest.raises(HomeAssistantError, match="upgrade is running"):
+        await hass.services.async_call("button", "press", {"entity_id": UPDATE_LISTS}, blocking=True)
+
+    await wait_for(hass, lambda: entry.runtime_data.upgrade["state"] == "ok")
+    state = hass.states.get(UPGRADE)
+    assert state.attributes["upgrade_state"] == "ok"
+    assert state.attributes["upgrade_exit"] == "0"
+    assert state.attributes["upgrade_log"] == ["== apt-get upgrade", "0 upgraded"]
+    await wait_for(hass, lambda: bool(events))
+    assert events[0].data["result"] == "ok" and events[0].data["node_id"] == "bkup"
+    assert_refresh_asked(mqtt_mock)
+
+
+async def test_failed_upgrade_fires_the_event(
+    hass: HomeAssistant, mqtt_mock, fake_remote, monkeypatch
+) -> None:
+    monkeypatch.setattr("custom_components.host_agent.runtime.UPGRADE_POLL", 0.01)
+    entry = await setup(hass, {"allow_upgrade": True})
+    online(hass)
+    await hass.async_block_till_done()
+    events = async_capture_events(hass, "host_agent_upgrade")
+    # an unreachable host (reboot, sshd restart) does not end the follow-up
+    fake_remote.upgrade_status.side_effect = [
+        None,
+        {"state": "failed", "exit": "100"},
+    ]
+    from custom_components.host_agent.ssh import SshError
+
+    fake_remote.upgrade_status.side_effect = [
+        SshError("down"),
+        {"state": "failed", "exit": "100"},
+    ]
+    fake_remote.upgrade_log.return_value = "E: broken\n"
+    await hass.services.async_call("button", "press", {"entity_id": UPGRADE}, blocking=True)
+    await wait_for(hass, lambda: entry.runtime_data.upgrade["state"] == "failed")
+    await wait_for(hass, lambda: bool(events))
+    assert events[0].data["result"] == "failed" and events[0].data["exit_code"] == "100"
+
+
+async def test_upgrade_refused_while_a_backup_runs(hass: HomeAssistant, mqtt_mock, fake_remote) -> None:
+    entry = await setup(hass, {"allow_upgrade": True})
+    online(hass)
+    await hass.async_block_till_done()
+    fake_remote.apt_upgrade.side_effect = remote.RemoteError("a dirvish backup is running, upgrade refused")
+    with pytest.raises(HomeAssistantError, match="backup is running"):
+        await hass.services.async_call("button", "press", {"entity_id": UPGRADE}, blocking=True)
+    assert entry.runtime_data.upgrade["state"] == "idle"
+
+
+async def test_upgrade_needs_the_option(hass: HomeAssistant, mqtt_mock, fake_remote) -> None:
+    entry = await setup(hass)
+    with pytest.raises(HomeAssistantError, match="not enabled"):
+        await entry.runtime_data.async_apt_upgrade()
+    fake_remote.apt_upgrade.assert_not_awaited()
+
+
+async def test_upgrade_in_progress_is_recovered_after_a_restart(
+    hass: HomeAssistant, mqtt_mock, fake_remote, monkeypatch
+) -> None:
+    monkeypatch.setattr("custom_components.host_agent.runtime.UPGRADE_POLL", 0.01)
+    monkeypatch.setattr("custom_components.host_agent.runtime.UPGRADE_RECOVER_DELAY", 0.01)
+    fake_remote.upgrade_status.side_effect = [
+        {"state": "running", "started": "100"},
+        {"state": "ok", "started": "100", "finished": "160", "exit": "0"},
+    ]
+    entry = await setup(hass, {"allow_upgrade": True})
+    await wait_for(hass, lambda: entry.runtime_data.upgrade["state"] == "ok")
+
+
+async def test_upgrade_option_in_the_options_flow(hass: HomeAssistant, mqtt_mock, fake_remote) -> None:
+    entry = await setup(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "general"})
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"auto_update": False, "language": "fr", "allow_reboot": False, "allow_upgrade": True},
+    )
+    assert result["type"] == "create_entry"
+    assert entry.options["allow_upgrade"] is True
+    await hass.async_block_till_done()
+    assert hass.states.get(UPGRADE) is not None

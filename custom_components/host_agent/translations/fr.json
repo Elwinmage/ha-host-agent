@@ -103,12 +103,14 @@
           "language": "Langue des entités et des messages",
           "allow_reboot": "Autoriser le redémarrage de l'hôte depuis Home Assistant",
           "wake_on_lan": "Wake-on-LAN (réveiller l'hôte quand il est hors ligne)",
-          "wol_broadcast": "Adresse de broadcast Wake-on-LAN"
+          "wol_broadcast": "Adresse de broadcast Wake-on-LAN",
+          "allow_upgrade": "Autoriser la mise à jour des paquets depuis Home Assistant"
         },
         "data_description": {
           "allow_reboot": "Crée un bouton « Redémarrer l'hôte ». Toute personne pouvant appuyer sur des boutons pourra alors redémarrer cet hôte.",
           "wake_on_lan": "Nécessite le Wake-on-LAN activé dans le BIOS/firmware de l'hôte. Le paquet part de Home Assistant : l'hôte doit être sur le même segment réseau (il ne traverse pas un VPN).",
-          "wol_broadcast": "Vide = 255.255.255.255. Utilisez l'adresse de broadcast du sous-réseau (ex. 192.168.1.255) si le paquet n'atteint pas l'hôte."
+          "wol_broadcast": "Vide = 255.255.255.255. Utilisez l'adresse de broadcast du sous-réseau (ex. 192.168.1.255) si le paquet n'atteint pas l'hôte.",
+          "allow_upgrade": "Crée un bouton « Mettre à jour les paquets » (apt uniquement : apt-get update puis upgrade, les fichiers de configuration existants sont conservés, aucun paquet n'est supprimé). Refusé tant qu'une sauvegarde dirvish est en cours. Toute personne pouvant appuyer sur des boutons pourra alors mettre à jour cet hôte."
         }
       },
       "smart": {
@@ -313,6 +315,12 @@
       },
       "wake_host": {
         "name": "Réveiller l'hôte"
+      },
+      "update_lists": {
+        "name": "Actualiser la liste des paquets"
+      },
+      "upgrade_packages": {
+        "name": "Mettre à jour les paquets"
       }
     }
   },
