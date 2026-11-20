@@ -350,6 +350,10 @@ async def test_update_lists_error_is_reported(hass: HomeAssistant, mqtt_mock, fa
     fake_remote.apt_update.side_effect = remote.RemoteError("usage: host-agent-admin status|install")
     with pytest.raises(HomeAssistantError, match="outdated"):
         await hass.services.async_call("button", "press", {"entity_id": UPDATE_LISTS}, blocking=True)
+    # the user is offered the re-authentication that reinstalls the helper
+    await hass.async_block_till_done()
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert [flow["context"]["source"] for flow in flows] == ["reauth"]
 
 
 async def test_upgrade_runs_in_the_background_and_reports(

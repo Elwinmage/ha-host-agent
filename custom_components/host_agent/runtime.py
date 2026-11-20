@@ -321,9 +321,12 @@ class HostAgentRuntime:
 
     def _remote_failure(self, err: remote.RemoteError) -> HomeAssistantError:
         if "usage:" in str(err):
-            # Hosts prepared by an older version only know the previous commands
+            # Hosts prepared by an older version only know the previous commands: the
+            # re-authentication flow (login credentials) reinstalls the helper
+            self.entry.async_start_reauth(self.hass)
             return HomeAssistantError(
-                f"{self.entry.title}: the helper on the host is outdated, re-authenticate the integration to update it"
+                f"{self.entry.title}: the helper on the host is outdated; re-authentication was requested, "
+                "open Settings > Devices & services > Host Agent and enter the login credentials to update it"
             )
         return HomeAssistantError(f"{self.entry.title}: {err}")
 
